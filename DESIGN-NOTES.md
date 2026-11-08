@@ -113,3 +113,64 @@ a singleton. Making the provider a singleton would capture one `DbContext` for t
   deployment that needs immediate consistency would use a distributed cache or a pub/sub invalidation message.
 - A missing or invalid operational setting falls back to a safe, restrictive default and is logged, so a bad
   row can never disable a limit.
+
+## Checks before forwarding
+
+Every request passes the checks in `Validation/` before anything is sent. `RequestValidator` runs them in a
+fixed order, one call after another, and stops at the first failure. It returns a `PreForwardResult`: either an
+`UpstreamRequest` ready to send, or a `Rejection`. The request never reaches the destination unless all checks pass.
+
+```
+RequestValidator
+  1. EnvelopeCheck           content type, size, valid JSON, only "clientId" and "json"
+     (fetch OperationPolicy by clientId)
+  2. OperationCheck          operation exists, enabled, destination enabled, size fits the operation
+  3. UrlIdCheck              urlId equals the configured one; removed from the remaining fields
+  4. DecryptionCheck         decrypt if the operation requires it; produces the parameters
+  5. ParameterCheck          required, type, length, range, unknown parameters
+  6. UpstreamRequestBuilder  method, address and body from configuration + validated parameters
+  7. HeaderFilter            which caller headers are forwarded
+```
+
+The checks are independent static classes: same code for every operation, driven by the `OperationPolicy` read
+from configuration. They are cheap-first: checks on the request itself, then configuration, then decryption
+(the parameters are inside the encrypted payload, so decryption must precede parameter validation).
+
+### Rejections are values, not exceptions
+
+A check returns `CheckResult<T>`: passed (with a value for the next check) or rejected (a `RejectionReason` and
+a fixed, safe message). A bad request is an expected outcome, not an exceptional one, and a returned value cannot
+be ignored by the caller the way a forgotten `catch` can. A genuine bug or an unavailable database still throws;
+the controller (stage 6) turns that into a generic 500, so the request is not forwarded (fail closed).
+`PreForwardResult` also carries the operation key and policy known so far, so a rejected request can be audited.
+Mapping reasons to HTTP responses is done in stage 6; the messages never contain caller-supplied values.
+
+### Decisions
+
+| Topic | Decision |
+|---|---|
+| Invalid HTTP method (test 6) | The endpoint accepts POST only (other methods get 405 from the framework). The method sent upstream comes only from configuration and must be one of GET/POST/PUT/PATCH/DELETE (database check constraint, re-checked in code; otherwise `ProxyMisconfigured`). A `method` or `url` field sent by the caller is just an unknown field and is rejected. |
+| Unknown top-level fields | Only `clientId` and `json` exist. "The request contract may be extended" is about us extending it, not the caller. |
+| Duplicate JSON fields and invalid text | Rejected (also inside `json` and inside the decrypted payload), so every system reads the same request. Invalid text such as `"\uD800"` (legal JSON syntax, not a valid character) is rejected up front, because reading it later would throw. |
+| Encrypted operation format | `json` = `{ urlId, nonce, ciphertext, tag }`: `urlId` stays visible ("Json must contain the urlId key"), the parameters are encrypted. A plain request to an encrypted operation is rejected, otherwise encryption could be skipped. Exactly those three fields are accepted. |
+| Decryption failures | Tag/key/operation mismatch, malformed payload and non-JSON plaintext are separate reasons internally (audit) but return one identical message, so the caller cannot tell which step failed. A missing key or profile is `ProxyMisconfigured`. The size limit is applied before decrypting. The raw decrypted bytes are wiped right after parsing; the parsed values remain in memory until the request ends, since they must be forwarded. |
+| Unknown parameters | Rejected by default. If the operation allows them, they do not cause a rejection but are **not forwarded**: only validated parameters reach the destination. Forwarding them (as query or body) is a possible extension, with a configured location and a length limit. |
+| Parameter types | Integer accepts a JSON number or a string of digits (`"123"`); `" 12"`, `"1e3"`, `1.5` are rejected. Boolean accepts only JSON `true`/`false`. Values are re-formatted to one canonical form (`"007"` becomes `7`) before they are placed in the request. Names are case-sensitive. A path parameter is always required. |
+| Path traversal (test 9) | Three layers: a numeric parameter cannot contain `..`; a path value may not be `.`/`..`, contain `/`, `\`, `%` or control characters; the value is escaped so it stays one path segment; finally the built URL must keep the destination's scheme, host, port and base path (compared with a trailing `/`, so `/api` does not accept `/api-admin`). The path template must start with `/` (otherwise text like `@host` could change the host) and may not contain `?` or `#` (the query string is built only from query parameters). |
+| Request body | Built from scratch out of the validated body parameters (JSON writer escapes text). The caller's body is never copied. A GET operation cannot have body parameters. |
+| Headers (test 10) | A header is forwarded only if it is on the operation's allowlist **and** not on a fixed deny list in code (Authorization, Cookie, hop-by-hop headers, Expect, Host, and every `Content-*` header, because the proxy sends a body it built itself) **and** not named in `Connection`. The deny list wins over the database, so a wrong row cannot leak credentials. Headers are filtered, not rejected, because every HTTP client sends headers the operation does not need. Values containing line breaks are dropped. |
+
+### Known limitations
+
+- Checks on the configuration itself (allowed method, base URL, template shape, a `{placeholder}` without a
+  path rule, body parameters on GET, the encryption algorithm) run on every request, as defence in depth.
+  A bad row therefore shows up only at request time, as `ProxyMisconfigured`. The admin update (stage 9) is the
+  place to reject such a row when it is saved.
+- On an operation cache miss the settings are read twice (once by the validator, once by the provider to know
+  the cache duration). Both reads are normally served from the cache, so this was left as is.
+
+### Service registration
+
+Interfaces exist where an implementation is swapped or faked in tests: `IPolicyRepository`, `IPolicyProvider`,
+`IKeySource`. Other classes are concrete (one implementation). The checks are static and need no registration.
+`RequestValidator` is scoped because it depends on the scoped provider.

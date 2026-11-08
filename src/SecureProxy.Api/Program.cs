@@ -2,6 +2,8 @@ using Microsoft.EntityFrameworkCore;
 using SecureProxy.Api.Data;
 using SecureProxy.Api.Data.Repositories;
 using SecureProxy.Api.Policies;
+using SecureProxy.Api.Security.Encryption;
+using SecureProxy.Api.Validation;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -19,6 +21,12 @@ builder.Services.AddDbContext<ProxyDbContext>(options => options.UseSqlServer(co
 builder.Services.AddScoped<IPolicyRepository, PolicyRepository>();
 builder.Services.AddSingleton<PolicyCache>();
 builder.Services.AddScoped<IPolicyProvider, PolicyProvider>();
+
+// Checks before forwarding. The key source and decryptor hold no per-request state (singletons);
+// the validator uses the scoped policy provider, so it is scoped too.
+builder.Services.AddSingleton<IKeySource, ConfigurationKeySource>();
+builder.Services.AddSingleton<AesGcmPayloadDecryptor>();
+builder.Services.AddScoped<RequestValidator>();
 
 builder.Services.AddControllers();
 // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
