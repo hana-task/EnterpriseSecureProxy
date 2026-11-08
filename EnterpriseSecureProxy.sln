@@ -1,0 +1,36 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{4B2C3715-CAB3-44F2-ACA4-FDC4458BB926}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SecureProxy.Api", "src\SecureProxy.Api\SecureProxy.Api.csproj", "{DB15C23D-4CF7-434D-BDAE-A25D85548900}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{CD166C40-EF61-4819-9EFE-93AE73E0A4A2}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SecureProxy.Tests", "tests\SecureProxy.Tests\SecureProxy.Tests.csproj", "{2288DCCC-4CCB-4238-9FDD-7F238A6013FE}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{DB15C23D-4CF7-434D-BDAE-A25D85548900}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{DB15C23D-4CF7-434D-BDAE-A25D85548900}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{DB15C23D-4CF7-434D-BDAE-A25D85548900}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{DB15C23D-4CF7-434D-BDAE-A25D85548900}.Release|Any CPU.Build.0 = Release|Any CPU
+		{2288DCCC-4CCB-4238-9FDD-7F238A6013FE}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{2288DCCC-4CCB-4238-9FDD-7F238A6013FE}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{2288DCCC-4CCB-4238-9FDD-7F238A6013FE}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{2288DCCC-4CCB-4238-9FDD-7F238A6013FE}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{DB15C23D-4CF7-434D-BDAE-A25D85548900} = {4B2C3715-CAB3-44F2-ACA4-FDC4458BB926}
+		{2288DCCC-4CCB-4238-9FDD-7F238A6013FE} = {CD166C40-EF61-4819-9EFE-93AE73E0A4A2}
+	EndGlobalSection
+EndGlobal
