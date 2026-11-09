@@ -10,6 +10,9 @@ using SecureProxy.Api.Validation;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Do not announce the server software ("Server: Kestrel") in every response.
+builder.WebHost.ConfigureKestrel(options => options.AddServerHeader = false);
+
 // The connection string is never in appsettings: user-secrets in development,
 // environment variable ConnectionStrings__ProxyDb elsewhere. Fail at startup if it is missing.
 var connectionString = builder.Configuration.GetConnectionString("ProxyDb")
