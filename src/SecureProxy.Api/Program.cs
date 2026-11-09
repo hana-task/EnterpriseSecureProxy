@@ -1,8 +1,10 @@
 using Microsoft.EntityFrameworkCore;
 using SecureProxy.Api.Data;
 using SecureProxy.Api.Data.Repositories;
+using SecureProxy.Api.Errors;
 using SecureProxy.Api.Forwarding;
 using SecureProxy.Api.Policies;
+using SecureProxy.Api.Proxy;
 using SecureProxy.Api.Security.Encryption;
 using SecureProxy.Api.Validation;
 
@@ -36,12 +38,22 @@ builder.Services.AddHttpClient(UpstreamForwarder.HttpClientName, client => clien
     .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler { AllowAutoRedirect = false });
 builder.Services.AddSingleton<UpstreamForwarder>();
 
+// The whole flow of one request. Scoped because the validator it uses is scoped.
+builder.Services.AddScoped<ProxyService>();
+
+// Unexpected exceptions become a generic 500 in the usual error format (see UseExceptionHandler below).
+builder.Services.AddExceptionHandler<UnhandledExceptionHandler>();
+
 builder.Services.AddControllers();
 // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
 var app = builder.Build();
+
+// First in the pipeline, so it catches exceptions from everything after it.
+// The empty lambda only satisfies a .NET 8 startup check; the registered UnhandledExceptionHandler does the work.
+app.UseExceptionHandler(_ => { });
 
 // Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
