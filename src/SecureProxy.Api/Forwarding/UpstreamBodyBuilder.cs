@@ -1,8 +1,9 @@
 using System.Text;
 using System.Text.Json;
 using SecureProxy.Api.Data.Entities;
+using SecureProxy.Api.Validation;
 
-namespace SecureProxy.Api.Validation;
+namespace SecureProxy.Api.Forwarding;
 
 /// <summary>
 /// Builds the JSON body for the destination from scratch, out of the validated body parameters only.

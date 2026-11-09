@@ -116,7 +116,7 @@ a singleton. Making the provider a singleton would capture one `DbContext` for t
 
 ## Checks before forwarding
 
-Every request passes the checks in `Validation/` before anything is sent. `RequestValidator` runs them in a
+Every request passes the checks in `Validation/` before anything is sent. Building the outgoing request (`UpstreamRequestBuilder`, `UpstreamBodyBuilder`, `UpstreamRequest`) lives in `Forwarding/`, next to the sending code. `RequestValidator` runs the checks in a
 fixed order, one call after another, and stops at the first failure. It returns a `PreForwardResult`: either an
 `UpstreamRequest` ready to send, or a `Rejection`. The request never reaches the destination unless all checks pass.
 

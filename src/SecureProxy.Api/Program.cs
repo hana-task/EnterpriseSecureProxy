@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using SecureProxy.Api.Data;
 using SecureProxy.Api.Data.Repositories;
+using SecureProxy.Api.Forwarding;
 using SecureProxy.Api.Policies;
 using SecureProxy.Api.Security.Encryption;
 using SecureProxy.Api.Validation;
@@ -27,6 +28,13 @@ builder.Services.AddScoped<IPolicyProvider, PolicyProvider>();
 builder.Services.AddSingleton<IKeySource, ConfigurationKeySource>();
 builder.Services.AddSingleton<AesGcmPayloadDecryptor>();
 builder.Services.AddScoped<RequestValidator>();
+
+// Forwarding. One named client for all destinations:
+// - Timeout is infinite here because the forwarder applies each destination's own timeout;
+// - redirects are not followed, so a destination cannot send the proxy to another host (SSRF).
+builder.Services.AddHttpClient(UpstreamForwarder.HttpClientName, client => client.Timeout = Timeout.InfiniteTimeSpan)
+    .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler { AllowAutoRedirect = false });
+builder.Services.AddSingleton<UpstreamForwarder>();
 
 builder.Services.AddControllers();
 // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle

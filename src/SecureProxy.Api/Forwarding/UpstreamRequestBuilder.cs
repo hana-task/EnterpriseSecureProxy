@@ -1,8 +1,9 @@
 using System.Text.RegularExpressions;
 using SecureProxy.Api.Data.Entities;
 using SecureProxy.Api.Policies;
+using SecureProxy.Api.Validation;
 
-namespace SecureProxy.Api.Validation;
+namespace SecureProxy.Api.Forwarding;
 
 /// <summary>
 /// Check 6: builds the request to the destination.

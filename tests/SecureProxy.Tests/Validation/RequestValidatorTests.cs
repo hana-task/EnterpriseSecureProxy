@@ -4,8 +4,9 @@ using Microsoft.AspNetCore.Http;
 using SecureProxy.Api.Data.Entities;
 using SecureProxy.Api.Policies;
 using SecureProxy.Api.Security.Encryption;
+using SecureProxy.Api.Forwarding;
 using SecureProxy.Api.Validation;
-using SecureProxy.Tests.Encryption;
+using SecureProxy.Tests.Security.Encryption;
 
 namespace SecureProxy.Tests.Validation;
 

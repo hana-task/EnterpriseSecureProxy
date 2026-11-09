@@ -1,4 +1,4 @@
-namespace SecureProxy.Api.Validation;
+namespace SecureProxy.Api.Forwarding;
 
 /// <summary>What will be sent to the destination: built only from configuration and validated input.</summary>
 public sealed record UpstreamRequest(string HttpMethod, Uri Url, string? BodyJson)

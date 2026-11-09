@@ -2,7 +2,7 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using SecureProxy.Api.Security.Encryption;
 using SecureProxy.Api.Validation;
-using SecureProxy.Tests.Encryption;
+using SecureProxy.Tests.Security.Encryption;
 
 namespace SecureProxy.Tests.Validation;
 

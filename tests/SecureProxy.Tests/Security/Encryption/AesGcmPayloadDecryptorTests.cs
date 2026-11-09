@@ -2,7 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using SecureProxy.Api.Security.Encryption;
 
-namespace SecureProxy.Tests.Encryption;
+namespace SecureProxy.Tests.Security.Encryption;
 
 public class AesGcmPayloadDecryptorTests
 {

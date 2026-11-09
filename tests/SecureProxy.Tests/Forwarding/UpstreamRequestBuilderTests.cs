@@ -1,9 +1,11 @@
 using System.Text.Json;
 using SecureProxy.Api.Data.Entities;
 using SecureProxy.Api.Policies;
+using SecureProxy.Api.Forwarding;
 using SecureProxy.Api.Validation;
+using SecureProxy.Tests.Validation;
 
-namespace SecureProxy.Tests.Validation;
+namespace SecureProxy.Tests.Forwarding;
 
 public class UpstreamRequestBuilderTests
 {

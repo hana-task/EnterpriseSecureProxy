@@ -1,3 +1,4 @@
+using SecureProxy.Api.Forwarding;
 using SecureProxy.Api.Policies;
 using SecureProxy.Api.Security.Encryption;
 using SecureProxy.Api.Security.Headers;
