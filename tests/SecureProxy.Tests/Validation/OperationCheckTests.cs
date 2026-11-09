@@ -52,4 +52,31 @@ public class OperationCheckTests
 
         Assert.Equal(RejectionReason.RequestTooLarge, result.Rejection!.Reason);
     }
+
+    [Theory]
+    [InlineData(-5)]
+    [InlineData(0)]
+    [InlineData(301)]
+    public void Destination_timeout_outside_the_allowed_range_is_rejected_before_forwarding(int timeoutSeconds)
+    {
+        var policy = TestData.CustomerGetPolicy();
+        policy = policy with { Destination = policy.Destination with { TimeoutSeconds = timeoutSeconds } };
+
+        var result = OperationCheck.Check(policy, SmallRequest);
+
+        Assert.Equal(RejectionReason.ProxyMisconfigured, result.Rejection!.Reason);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void Destination_response_limit_that_is_not_positive_is_rejected_before_forwarding(long maxResponseBytes)
+    {
+        var policy = TestData.CustomerGetPolicy();
+        policy = policy with { Destination = policy.Destination with { MaxResponseBytes = maxResponseBytes } };
+
+        var result = OperationCheck.Check(policy, SmallRequest);
+
+        Assert.Equal(RejectionReason.ProxyMisconfigured, result.Rejection!.Reason);
+    }
 }

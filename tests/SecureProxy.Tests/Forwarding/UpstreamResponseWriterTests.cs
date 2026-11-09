@@ -11,12 +11,13 @@ public class UpstreamResponseWriterTests
     private static readonly Uri CustomerUrl = new("http://localhost:5101/customers/123");
 
     /// <summary>Sends through the real forwarder to a fake destination, so the result is a genuine ForwardResult.</summary>
-    private static async Task<ForwardResult> ForwardAsync(HttpResponseMessage destinationResponse, int timeoutSeconds = 10)
+    private static async Task<ForwardResult> ForwardAsync(
+        HttpResponseMessage destinationResponse, int timeoutSeconds = 10, CancellationToken callerToken = default)
     {
         var handler = new RecordingHandler((_, _) => Task.FromResult(destinationResponse));
         var destination = TestData.CustomerGetPolicy().Destination with { TimeoutSeconds = timeoutSeconds };
         return await new UpstreamForwarder(new FakeHttpClientFactory(handler))
-            .SendAsync(new UpstreamRequest("GET", CustomerUrl, null), destination, CancellationToken.None);
+            .SendAsync(new UpstreamRequest("GET", CustomerUrl, null), destination, callerToken);
     }
 
     private static HttpResponseMessage ResponseWith(HttpStatusCode status, byte[] body) =>
@@ -142,6 +143,47 @@ public class UpstreamResponseWriterTests
         Assert.Equal(ForwardOutcome.Timeout, outcome);
     }
 
+    [Fact]
+    public async Task Caller_leaving_while_the_body_is_read_is_not_reported_as_a_timeout()
+    {
+        var (context, _) = NewCallerContext();
+        using var callerSource = new CancellationTokenSource();
+        context.RequestAborted = callerSource.Token;
+        using var result = await ForwardAsync(
+            new HttpResponseMessage(HttpStatusCode.OK) { Content = new StallingContent() }, callerToken: callerSource.Token);
+
+        var writing = UpstreamResponseWriter.WriteAsync(context.Response, result, maxResponseBytes: 1000);
+        callerSource.Cancel();
+
+        Assert.Equal(ForwardOutcome.CallerCancelled, await writing);
+    }
+
+    [Fact]
+    public async Task Connection_dropping_in_the_middle_of_the_body_is_a_connection_failure()
+    {
+        var (context, _) = NewCallerContext();
+        var brokenBody = new StallingContent(_ => throw new IOException("connection reset"));
+        using var result = await ForwardAsync(new HttpResponseMessage(HttpStatusCode.OK) { Content = brokenBody });
+
+        var outcome = await UpstreamResponseWriter.WriteAsync(context.Response, result, maxResponseBytes: 1000);
+
+        Assert.Equal(ForwardOutcome.ConnectionFailed, outcome);
+        Assert.False(context.Response.Headers.ContainsKey("X-Proxy-Source")); // nothing written: a clean error is still possible
+    }
+
+    [Fact]
+    public async Task Destination_cannot_set_the_proxy_source_marker_itself()
+    {
+        var upstream = ResponseWith(HttpStatusCode.OK, "{}"u8.ToArray());
+        upstream.Headers.TryAddWithoutValidation("X-Proxy-Source", "proxy");
+        var (context, _) = NewCallerContext();
+        using var result = await ForwardAsync(upstream);
+
+        await UpstreamResponseWriter.WriteAsync(context.Response, result, maxResponseBytes: 1000);
+
+        Assert.Equal("upstream", context.Response.Headers["X-Proxy-Source"].ToString());
+    }
+
     // ---- fakes ----
 
     /// <summary>A body whose length is not known in advance, like a chunked response.</summary>
@@ -164,12 +206,22 @@ public class UpstreamResponseWriterTests
         }
     }
 
-    /// <summary>A body whose bytes never arrive, like a destination that stalls after sending its headers.</summary>
+    /// <summary>
+    /// A body read through the given function. By default the bytes never arrive, like a destination that
+    /// stalls after sending its headers; a function that throws simulates a connection that drops.
+    /// </summary>
     private sealed class StallingContent : HttpContent
     {
+        private readonly Func<CancellationToken, Task> _read;
+
+        public StallingContent(Func<CancellationToken, Task>? read = null)
+        {
+            _read = read ?? (token => Task.Delay(Timeout.Infinite, token));
+        }
+
         protected override Task SerializeToStreamAsync(Stream stream, TransportContext? context) => Task.CompletedTask;
 
-        protected override Task<Stream> CreateContentReadStreamAsync() => Task.FromResult<Stream>(new StallingStream());
+        protected override Task<Stream> CreateContentReadStreamAsync() => Task.FromResult<Stream>(new StallingStream(_read));
 
         protected override bool TryComputeLength(out long length)
         {
@@ -178,12 +230,19 @@ public class UpstreamResponseWriterTests
         }
     }
 
-    /// <summary>A stream whose reads wait until they are cancelled, as a real network stream does.</summary>
+    /// <summary>A stream whose reads honour the cancellation token, as a real network stream does.</summary>
     private sealed class StallingStream : Stream
     {
+        private readonly Func<CancellationToken, Task> _read;
+
+        public StallingStream(Func<CancellationToken, Task> read)
+        {
+            _read = read;
+        }
+
         public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
         {
-            await Task.Delay(Timeout.Infinite, cancellationToken);
+            await _read(cancellationToken);
             return 0;
         }
 

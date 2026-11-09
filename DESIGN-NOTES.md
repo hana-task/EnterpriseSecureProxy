@@ -162,7 +162,8 @@ Mapping reasons to HTTP responses is done in stage 6; the messages never contain
 
 ### Known limitations
 
-- Checks on the configuration itself (allowed method, base URL, template shape, a `{placeholder}` without a
+- Checks on the configuration itself (allowed method, base URL, template shape, destination timeout range and
+  response limit, a `{placeholder}` without a
   path rule, body parameters on GET, the encryption algorithm) run on every request, as defence in depth.
   A bad row therefore shows up only at request time, as `ProxyMisconfigured`. The admin update (stage 9) is the
   place to reject such a row when it is saved.

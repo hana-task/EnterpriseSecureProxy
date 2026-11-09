@@ -9,6 +9,10 @@ namespace SecureProxy.Api.Validation;
 /// </summary>
 public static class OperationCheck
 {
+    // Same range as the CK_Destinations_TimeoutSeconds constraint in the database.
+    private const int MinTimeoutSeconds = 1;
+    private const int MaxTimeoutSeconds = 300;
+
     public static CheckResult<OperationPolicy> Check(OperationPolicy? policy, RequestEnvelope envelope)
     {
         if (policy is null)
@@ -19,6 +23,13 @@ public static class OperationCheck
 
         if (!policy.Destination.IsEnabled)
             return Reject(RejectionReason.DestinationDisabled, "The destination of this operation is disabled.");
+
+        // The database restricts these too (CHECK constraints), but they are re-checked before anything
+        // is sent: a bad timeout would throw inside the forwarder, and a non-positive response limit would
+        // only be noticed after the destination had already done the work (for example a POST).
+        if (policy.Destination.TimeoutSeconds is < MinTimeoutSeconds or > MaxTimeoutSeconds
+            || policy.Destination.MaxResponseBytes <= 0)
+            return Reject(RejectionReason.ProxyMisconfigured, "The operation is not configured correctly.");
 
         if (envelope.BodySizeBytes > policy.MaxRequestBytes)
             return Reject(RejectionReason.RequestTooLarge, "The request is too large for this operation.");

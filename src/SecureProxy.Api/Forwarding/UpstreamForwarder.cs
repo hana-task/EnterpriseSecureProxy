@@ -36,10 +36,13 @@ public sealed class UpstreamForwarder
         // One token that is cancelled by either the caller (disconnects) or the timeout.
         // The result keeps it, so reading the body later is limited by the same timeout.
         var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeoutSource.CancelAfter(TimeSpan.FromSeconds(destination.TimeoutSeconds));
 
         try
         {
+            // Inside the try, so the source is released even if the value is invalid.
+            // (OperationCheck rejects such a destination before this point.)
+            timeoutSource.CancelAfter(TimeSpan.FromSeconds(destination.TimeoutSeconds));
+
             // Both attempts share the same timeout, so retrying never makes the caller wait longer.
             for (var attempt = 1; ; attempt++)
             {
