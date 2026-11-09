@@ -22,7 +22,20 @@ public static class EnvelopeCheck
         if (request.ContentLength > globalMaxRequestBytes)
             return Reject(RejectionReason.RequestTooLarge, "The request is too large.");
 
-        var body = await ReadBodyAsync(request.Body, globalMaxRequestBytes, cancellationToken);
+        byte[]? body;
+        try
+        {
+            body = await ReadBodyAsync(request.Body, globalMaxRequestBytes, cancellationToken);
+        }
+        catch (BadHttpRequestException exception)
+        {
+            // The server could not read the body as HTTP (for example a broken chunked encoding,
+            // or a body cut short). That is the caller's fault, so it is a rejection and not a 500.
+            return exception.StatusCode == StatusCodes.Status413PayloadTooLarge
+                ? Reject(RejectionReason.RequestTooLarge, "The request is too large.")
+                : Reject(RejectionReason.MalformedRequest, "The request body could not be read.");
+        }
+
         if (body is null)
             return Reject(RejectionReason.RequestTooLarge, "The request is too large.");
 

@@ -106,4 +106,35 @@ public class EnvelopeCheckTests
         var result = await Check(CreateRequest(body));
         Assert.Equal(RejectionReason.MalformedRequest, result.Rejection!.Reason);
     }
+
+    // ---- a body the server cannot read (found in the stage 6 review: it used to become a 500) ----
+
+    [Theory]
+    [InlineData(StatusCodes.Status400BadRequest, RejectionReason.MalformedRequest)]
+    [InlineData(StatusCodes.Status413PayloadTooLarge, RejectionReason.RequestTooLarge)]
+    public async Task Body_the_server_cannot_read_is_rejected_instead_of_throwing(int serverStatus, RejectionReason expected)
+    {
+        var request = CreateRequest("{}");
+        request.Body = new UnreadableBody(new BadHttpRequestException("Bad chunk size data.", serverStatus));
+
+        var result = await Check(request);
+
+        Assert.False(result.Passed);
+        Assert.Equal(expected, result.Rejection!.Reason);
+        Assert.DoesNotContain("chunk", result.Rejection.SafeMessage);
+    }
+
+    /// <summary>A request body that fails the way Kestrel fails on broken HTTP framing.</summary>
+    private sealed class UnreadableBody : MemoryStream
+    {
+        private readonly Exception _exception;
+
+        public UnreadableBody(Exception exception)
+        {
+            _exception = exception;
+        }
+
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default) =>
+            ValueTask.FromException<int>(_exception);
+    }
 }
