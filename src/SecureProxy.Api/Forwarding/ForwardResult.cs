@@ -9,10 +9,13 @@ namespace SecureProxy.Api.Forwarding;
 /// </summary>
 public sealed class ForwardResult : IDisposable
 {
-    private ForwardResult(ForwardOutcome outcome, HttpResponseMessage? response)
+    private readonly CancellationTokenSource? _timeoutSource;
+
+    private ForwardResult(ForwardOutcome outcome, HttpResponseMessage? response, CancellationTokenSource? timeoutSource)
     {
         Outcome = outcome;
         Response = response;
+        _timeoutSource = timeoutSource;
     }
 
     public ForwardOutcome Outcome { get; }
@@ -20,7 +23,20 @@ public sealed class ForwardResult : IDisposable
     /// <summary>The destination's response. Set only when Outcome is Responded.</summary>
     public HttpResponseMessage? Response { get; }
 
-    public static ForwardResult Responded(HttpResponseMessage response) => new(ForwardOutcome.Responded, response);
+    /// <summary>
+    /// Cancelled when the caller disconnects or the destination's timeout runs out.
+    /// Use it while reading the response body, so a destination that stalls mid-body is also cut off.
+    /// </summary>
+    public CancellationToken BodyCancellationToken => _timeoutSource?.Token ?? CancellationToken.None;
 
-    public void Dispose() => Response?.Dispose();
+    public static ForwardResult Responded(HttpResponseMessage response, CancellationTokenSource timeoutSource) =>
+        new(ForwardOutcome.Responded, response, timeoutSource);
+
+    public static ForwardResult Failed(ForwardOutcome outcome) => new(outcome, null, null);
+
+    public void Dispose()
+    {
+        Response?.Dispose();
+        _timeoutSource?.Dispose();
+    }
 }

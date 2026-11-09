@@ -60,4 +60,71 @@ public class UpstreamForwarderTests
         Assert.Equal(statusCode, result.Response!.StatusCode);
         Assert.Equal("""{"error":"from upstream"}""", await result.Response.Content.ReadAsStringAsync());
     }
+
+    // ---- timeout and cancellation (assignment tests 13 and 15) ----
+
+    /// <summary>A destination that never answers, but notices when the request is cancelled.</summary>
+    private static RecordingHandler NeverAnswers(Action onCancelled) => new(async (_, token) =>
+    {
+        try
+        {
+            await Task.Delay(Timeout.Infinite, token);
+        }
+        catch (OperationCanceledException)
+        {
+            onCancelled();
+            throw;
+        }
+        return new HttpResponseMessage(HttpStatusCode.OK);
+    });
+
+    [Fact]
+    public async Task Destination_that_does_not_answer_in_time_is_a_timeout()
+    {
+        var destination = NeverAnswers(() => { });
+        var oneSecondDestination = TestData.CustomerGetPolicy().Destination with { TimeoutSeconds = 1 };
+
+        using var result = await ForwarderFor(destination).SendAsync(
+            new UpstreamRequest("GET", CustomerUrl, null), oneSecondDestination, CancellationToken.None);
+
+        Assert.Equal(ForwardOutcome.Timeout, result.Outcome);
+        Assert.Null(result.Response);
+    }
+
+    [Fact]
+    public async Task Caller_cancelling_is_not_reported_as_a_timeout_and_reaches_the_destination_call()
+    {
+        var cancellationReachedDestination = false;
+        var destination = NeverAnswers(() => cancellationReachedDestination = true);
+        using var callerSource = new CancellationTokenSource();
+
+        var sending = ForwarderFor(destination).SendAsync(
+            new UpstreamRequest("GET", CustomerUrl, null), TestData.CustomerGetPolicy().Destination, callerSource.Token);
+        callerSource.Cancel();
+        using var result = await sending;
+
+        Assert.Equal(ForwardOutcome.CallerCancelled, result.Outcome);
+        Assert.True(cancellationReachedDestination, "the caller's cancellation must reach the outgoing call");
+    }
+
+    [Fact]
+    public async Task Failure_to_connect_is_reported_as_connection_failed()
+    {
+        var destination = new RecordingHandler((_, _) => throw new HttpRequestException("connection refused"));
+
+        using var result = await ForwarderFor(destination).SendAsync(
+            new UpstreamRequest("GET", CustomerUrl, null), TestData.CustomerGetPolicy().Destination, CancellationToken.None);
+
+        Assert.Equal(ForwardOutcome.ConnectionFailed, result.Outcome);
+        Assert.Null(result.Response);
+    }
+
+    [Fact]
+    public async Task Unexpected_exceptions_are_not_hidden()
+    {
+        var destination = new RecordingHandler((_, _) => throw new InvalidOperationException("bug"));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => ForwarderFor(destination).SendAsync(
+            new UpstreamRequest("GET", CustomerUrl, null), TestData.CustomerGetPolicy().Destination, CancellationToken.None));
+    }
 }

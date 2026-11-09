@@ -28,8 +28,36 @@ public sealed class UpstreamForwarder
         var client = _httpClientFactory.CreateClient(HttpClientName);
         using var message = CreateMessage(request);
 
-        var response = await client.SendAsync(message, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
-        return ForwardResult.Responded(response);
+        // One token that is cancelled by either the caller (disconnects) or the timeout.
+        // The result keeps it, so reading the body later is limited by the same timeout.
+        var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeoutSource.CancelAfter(TimeSpan.FromSeconds(destination.TimeoutSeconds));
+
+        try
+        {
+            var response = await client.SendAsync(message, HttpCompletionOption.ResponseHeadersRead, timeoutSource.Token);
+            return ForwardResult.Responded(response, timeoutSource);
+        }
+        catch (OperationCanceledException)
+        {
+            timeoutSource.Dispose();
+
+            // Both cases throw the same exception. Only the caller's own token tells them apart:
+            // if it is cancelled the caller left, otherwise our timeout fired.
+            return ForwardResult.Failed(cancellationToken.IsCancellationRequested
+                ? ForwardOutcome.CallerCancelled
+                : ForwardOutcome.Timeout);
+        }
+        catch (HttpRequestException)
+        {
+            timeoutSource.Dispose();
+            return ForwardResult.Failed(ForwardOutcome.ConnectionFailed);
+        }
+        catch
+        {
+            timeoutSource.Dispose();
+            throw;
+        }
     }
 
     /// <summary>Everything here comes from the UpstreamRequest, which was built from configuration and validated input.</summary>
