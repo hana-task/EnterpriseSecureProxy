@@ -186,26 +186,6 @@ public class UpstreamResponseWriterTests
 
     // ---- fakes ----
 
-    /// <summary>A body whose length is not known in advance, like a chunked response.</summary>
-    private sealed class UnknownLengthContent : HttpContent
-    {
-        private readonly byte[] _bytes;
-
-        public UnknownLengthContent(byte[] bytes)
-        {
-            _bytes = bytes;
-        }
-
-        protected override Task SerializeToStreamAsync(Stream stream, TransportContext? context) =>
-            stream.WriteAsync(_bytes, 0, _bytes.Length);
-
-        protected override bool TryComputeLength(out long length)
-        {
-            length = 0;
-            return false;
-        }
-    }
-
     /// <summary>
     /// A body read through the given function. By default the bytes never arrive, like a destination that
     /// stalls after sending its headers; a function that throws simulates a connection that drops.
