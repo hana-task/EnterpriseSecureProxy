@@ -217,3 +217,88 @@ This needs support at the destination, so the proxy only forwards such a key if 
   request. This is safe only because `GET` is idempotent; an operation configured as `GET` that changes data at
   the destination would be repeated. The configuration owner is responsible for the method matching the effect.
 - A destination that is down costs a failed request twice per `GET`. A circuit breaker (stage 10) limits that.
+
+## Endpoint and error responses
+
+`POST /api/proxy/execute` is handled by a thin `ProxyController` that hands the `HttpContext` to `ProxyService`.
+The service runs the flow and writes the answer itself, because the proxy works on raw streams: the checks read
+the request body (size, duplicate fields, encrypted payload) and the destination's response is streamed through.
+For the same reason the action has no model parameter: automatic model validation (`[ApiController]`) would
+answer with its own 400 format before our checks run.
+
+```
+ProxyService.ExecuteAsync
+  RequestValidator      rejected -> proxy error (nothing is sent)
+  UpstreamForwarder     Responded -> UpstreamResponseWriter streams the destination's answer
+  decision              Responded / CallerCancelled / response already started -> write nothing more
+                        otherwise -> proxy error (502 / 504)
+```
+
+### Error format
+
+Every proxy-generated error is `application/problem+json` (RFC 7807 ProblemDetails) with the header
+`X-Proxy-Source: proxy`; a destination's answer carries `X-Proxy-Source: upstream`. The destination cannot fake
+the proxy marker, because its headers pass an allowlist.
+
+```json
+{ "status": 404, "title": "Unknown operation", "detail": "The requested operation does not exist.",
+  "errorCode": "unknown_operation", "correlationId": "..." }
+```
+
+- `errorCode` is fixed and documented, so callers do not parse messages.
+- `detail` is the rejection's safe message: never a value sent by the caller, a hostname, configuration or
+  encryption detail.
+- `correlationId` is the ASP.NET request id for now; stage 8 replaces its source in one place.
+- The response is cleared before an error is written, so no header set earlier can leak into it.
+
+### Mapping (`ProxyErrorCatalog`, the single place for it)
+
+| Failure | HTTP | errorCode |
+|---|---|---|
+| Invalid content type | 415 | `invalid_content_type` |
+| Request too large (global or per operation) | 413 | `request_too_large` |
+| Malformed envelope, or a body the server cannot read | 400 | `malformed_request` |
+| Unknown operation | 404 | `unknown_operation` |
+| Disabled operation | 403 | `operation_disabled` |
+| Disabled destination | 503 | `destination_unavailable` |
+| `urlId` missing or not matching | 400 | `invalid_url_id` |
+| Encryption required but payload is plain | 400 | `encryption_required` |
+| Invalid encrypted payload or failed decryption (one public code) | 400 | `invalid_encrypted_payload` |
+| Missing / invalid / unknown parameter, invalid path value | 400 | `missing_parameter`, `invalid_parameter`, `unknown_parameter`, `invalid_path_value` |
+| Stored configuration is wrong (not the caller's fault) | 500 | `proxy_misconfigured` |
+| Destination timeout | 504 | `upstream_timeout` |
+| Destination unreachable | 502 | `upstream_unreachable` |
+| Destination response over its limit | 502 | `upstream_response_too_large` |
+| Destination answered (any status, also 4xx/5xx) | destination's status | none: the answer is passed on |
+| Caller disconnected | nothing is sent | (audited in stage 8) |
+| Unexpected exception | 500 | `internal_error` |
+| Stale configuration update | 409 | `concurrency_conflict` (admin endpoint, stage 9) |
+
+A "missing destination" cannot occur: every operation has a required foreign key to a destination.
+
+The two decryption failures share one public code so the caller learns nothing about which part failed; the
+exact reason is kept for the audit log. A unit test walks every `RejectionReason`, so a new reason without a
+mapping fails the tests.
+
+### Failures after the response started
+
+The destination's status and headers are written only when its first body bytes arrive. If the forwarding fails
+before that, a clean 502/504 is still possible. If part of the body was already sent, the writer aborts the
+connection and nothing more is written: the caller sees a broken response instead of a truncated one that looks
+complete.
+
+### Unexpected exceptions
+
+`UseExceptionHandler` is first in the pipeline and calls `UnhandledExceptionHandler`, which writes a generic 500
+`internal_error` in the same format. The middleware logs the full exception to the internal log only, skips the
+handler when the response has already started (the connection is aborted) and when the caller cancelled. A caller
+that disconnects during the checks is not an error: `ProxyService` catches that cancellation and writes nothing.
+The `Server` response header is turned off so the server software is not announced.
+
+### Known limitations
+
+- 404 (wrong route) and 405 (a method other than POST) are produced by ASP.NET routing, without the ProblemDetails
+  body or `X-Proxy-Source`. `UseStatusCodePages` could unify them; it was left out because they are outside the
+  proxy endpoint.
+- When the configuration database is unreachable the request fails closed with 500; the audit behaviour for that
+  case is defined in the audit section.
