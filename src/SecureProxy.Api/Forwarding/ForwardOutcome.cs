@@ -12,6 +12,9 @@ public enum ForwardOutcome
     /// <summary>The destination could not be reached (refused, DNS failure, connection dropped). Becomes 502.</summary>
     ConnectionFailed,
 
+    /// <summary>The destination's response is bigger than the destination's MaxResponseBytes. Becomes 502.</summary>
+    ResponseTooLarge,
+
     /// <summary>The caller gave up (closed the connection). Nobody is waiting for an answer.</summary>
     CallerCancelled
 }
