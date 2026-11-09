@@ -26,7 +26,12 @@ public sealed class UpstreamForwarder
         UpstreamRequest request, DestinationPolicy destination, CancellationToken cancellationToken)
     {
         var client = _httpClientFactory.CreateClient(HttpClientName);
-        using var message = CreateMessage(request);
+
+        // Retry policy (decision 6): one more attempt, only for GET and only after a connection failure.
+        // GET does not change anything at the destination, so repeating it cannot duplicate an action.
+        // POST/PUT/PATCH/DELETE are never repeated: the first attempt may have reached the destination
+        // before the connection dropped. Timeouts and HTTP error statuses are not retried either.
+        var maxAttempts = request.HttpMethod == "GET" ? 2 : 1;
 
         // One token that is cancelled by either the caller (disconnects) or the timeout.
         // The result keeps it, so reading the body later is limited by the same timeout.
@@ -35,8 +40,21 @@ public sealed class UpstreamForwarder
 
         try
         {
-            var response = await client.SendAsync(message, HttpCompletionOption.ResponseHeadersRead, timeoutSource.Token);
-            return ForwardResult.Responded(response, timeoutSource);
+            // Both attempts share the same timeout, so retrying never makes the caller wait longer.
+            for (var attempt = 1; ; attempt++)
+            {
+                // A message can be sent only once, so each attempt builds its own.
+                using var message = CreateMessage(request);
+                try
+                {
+                    var response = await client.SendAsync(message, HttpCompletionOption.ResponseHeadersRead, timeoutSource.Token);
+                    return ForwardResult.Responded(response, timeoutSource);
+                }
+                catch (HttpRequestException) when (attempt < maxAttempts)
+                {
+                    // Connection failure: go around the loop once more.
+                }
+            }
         }
         catch (OperationCanceledException)
         {

@@ -119,6 +119,82 @@ public class UpstreamForwarderTests
         Assert.Null(result.Response);
     }
 
+    // ---- retries (decision 6: one retry, GET only, connection failures only) ----
+
+    /// <summary>Fails to connect the given number of times, then answers 200.</summary>
+    private static RecordingHandler FailsThenAnswers(int failures)
+    {
+        var calls = 0;
+        return new RecordingHandler((_, _) => ++calls <= failures
+            ? throw new HttpRequestException("connection refused")
+            : Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)));
+    }
+
+    [Fact]
+    public async Task Get_is_retried_once_after_a_connection_failure()
+    {
+        var destination = FailsThenAnswers(failures: 1);
+
+        using var result = await ForwarderFor(destination).SendAsync(
+            new UpstreamRequest("GET", CustomerUrl, null), TestData.CustomerGetPolicy().Destination, CancellationToken.None);
+
+        Assert.Equal(ForwardOutcome.Responded, result.Outcome);
+        Assert.Equal(2, destination.Requests.Count);
+    }
+
+    [Fact]
+    public async Task Get_is_not_retried_more_than_once()
+    {
+        var destination = FailsThenAnswers(failures: 5);
+
+        using var result = await ForwarderFor(destination).SendAsync(
+            new UpstreamRequest("GET", CustomerUrl, null), TestData.CustomerGetPolicy().Destination, CancellationToken.None);
+
+        Assert.Equal(ForwardOutcome.ConnectionFailed, result.Outcome);
+        Assert.Equal(2, destination.Requests.Count);
+    }
+
+    [Theory]
+    [InlineData("POST")]
+    [InlineData("PUT")]
+    [InlineData("PATCH")]
+    [InlineData("DELETE")]
+    public async Task Methods_that_change_data_are_never_retried(string method)
+    {
+        var destination = FailsThenAnswers(failures: 1);
+
+        using var result = await ForwarderFor(destination).SendAsync(
+            new UpstreamRequest(method, CustomerUrl, null), TestData.CustomerGetPolicy().Destination, CancellationToken.None);
+
+        Assert.Equal(ForwardOutcome.ConnectionFailed, result.Outcome);
+        Assert.Single(destination.Requests);
+    }
+
+    [Fact]
+    public async Task Get_is_not_retried_after_an_http_error_status()
+    {
+        var destination = new RecordingHandler(HttpStatusCode.ServiceUnavailable);
+
+        using var result = await ForwarderFor(destination).SendAsync(
+            new UpstreamRequest("GET", CustomerUrl, null), TestData.CustomerGetPolicy().Destination, CancellationToken.None);
+
+        Assert.Equal(ForwardOutcome.Responded, result.Outcome);
+        Assert.Single(destination.Requests);
+    }
+
+    [Fact]
+    public async Task Get_is_not_retried_after_a_timeout()
+    {
+        var destination = NeverAnswers(() => { });
+        var oneSecondDestination = TestData.CustomerGetPolicy().Destination with { TimeoutSeconds = 1 };
+
+        using var result = await ForwarderFor(destination).SendAsync(
+            new UpstreamRequest("GET", CustomerUrl, null), oneSecondDestination, CancellationToken.None);
+
+        Assert.Equal(ForwardOutcome.Timeout, result.Outcome);
+        Assert.Single(destination.Requests);
+    }
+
     [Fact]
     public async Task Unexpected_exceptions_are_not_hidden()
     {
