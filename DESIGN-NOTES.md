@@ -174,3 +174,45 @@ Mapping reasons to HTTP responses is done in stage 6; the messages never contain
 Interfaces exist where an implementation is swapped or faked in tests: `IPolicyRepository`, `IPolicyProvider`,
 `IKeySource`. Other classes are concrete (one implementation). The checks are static and need no registration.
 `RequestValidator` is scoped because it depends on the scoped provider.
+
+## Forwarding to the destination
+
+After the checks pass, `UpstreamForwarder` sends the `UpstreamRequest` and `UpstreamResponseWriter` streams the
+answer back. Neither throws for expected failures; they return a `ForwardOutcome`, like the checks return values.
+
+```
+UpstreamForwarder.SendAsync   IHttpClientFactory client -> HttpRequestMessage -> response headers only
+  -> ForwardResult            Responded | Timeout | ConnectionFailed | CallerCancelled
+UpstreamResponseWriter        status code + filtered headers + body copied in chunks, size-limited
+  -> ForwardOutcome           Responded | ResponseTooLarge | Timeout | ConnectionFailed | CallerCancelled
+```
+
+Mapping to HTTP (done in stage 6): `Timeout` -> 504, `ConnectionFailed` and `ResponseTooLarge` -> 502,
+`CallerCancelled` -> nothing is sent (nobody is waiting; only audited). An HTTP error from the destination
+(4xx/5xx) is `Responded`: its status code and body are passed on, marked with `X-Proxy-Source: upstream`, so a
+caller can tell a destination answer from a proxy-generated failure.
+
+### Decisions
+
+| Topic | Decision |
+|---|---|
+| HttpClient | One named client from `IHttpClientFactory` (pooled connections, rotated so DNS changes are noticed). Its own `Timeout` is infinite because the timeout is per destination and must be distinguishable from a caller cancel. Redirects are not followed (`AllowAutoRedirect = false`): a destination must not be able to send the proxy to another host (SSRF). A 3xx is passed on as the destination's answer, without its `Location` header. |
+| Timeout (test 13) | `Destination.TimeoutSeconds`, applied with a linked `CancellationTokenSource` (caller's `RequestAborted` + `CancelAfter`). It covers the headers **and** the body: a destination that answers and then stalls is cut off too. There is no per-operation timeout (left out on purpose, see the data model). |
+| Caller cancel vs timeout (tests 13, 15) | Both surface as `OperationCanceledException`. The caller's own token decides: cancelled means the caller left (`CallerCancelled`), otherwise the destination timed out (504). The linked token is passed to `SendAsync` and to every body read, so the cancel reaches the outgoing call. |
+| Response size limit | `Destination.MaxResponseBytes`. A declared `Content-Length` over the limit is refused before anything is sent. Otherwise the bytes are counted while streaming (a destination may not declare a size, or may lie). Status and headers are written only when the first chunk arrives, so an early failure still lets the controller send a clean error. If the limit is exceeded after sending started, the connection is aborted: a broken response is better than a truncated one that looks complete. |
+| Streaming | `ResponseHeadersRead` and an 8 KB copy loop: the body is never loaded into memory as a whole. |
+| Response headers | Allowlist in code (`Content-Type`, `Content-Encoding`, `Content-Language`, `Cache-Control`, `ETag`, `Last-Modified`, `Retry-After`). Everything else is dropped: `Set-Cookie`, `Server`, `X-Powered-By`, `Location`, hop-by-hop headers. `Content-Length` is not copied because the proxy's own connection frames the body. |
+| Retries (decision 6) | One extra attempt, only for `GET` and only after a connection failure, within the same timeout. A `GET` changes nothing at the destination, so repeating it cannot duplicate an action. `POST`/`PUT`/`PATCH`/`DELETE` are never repeated: the connection may drop after the destination already did the work. Timeouts (the destination may still be working) and HTTP error statuses (the destination answered; repeating adds load to a struggling system) are not retried. |
+
+### Idempotency keys (explanation, not implemented)
+
+To retry a non-idempotent call safely, the caller sends a unique key with each logical operation and the
+destination remembers it: a second request with the same key returns the stored result instead of acting again.
+This needs support at the destination, so the proxy only forwards such a key if an operation allows that header.
+
+### Known limitations
+
+- A connection failure on `GET` is retried once even if the connection dropped after the destination received the
+  request. This is safe only because `GET` is idempotent; an operation configured as `GET` that changes data at
+  the destination would be repeated. The configuration owner is responsible for the method matching the effect.
+- A destination that is down costs a failed request twice per `GET`. A circuit breaker (stage 10) limits that.
