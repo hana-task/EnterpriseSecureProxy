@@ -6,7 +6,9 @@ using System.Text.Json;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using SecureProxy.Api.Audit;
 using SecureProxy.Api.Data;
 using SecureProxy.Api.Data.Entities;
@@ -666,6 +668,70 @@ public class ProxyEndpointTests : IClassFixture<ProxyApplicationFactory>
         Assert.Equal("fake?line?b?", record.OperationKey);
         Assert.Null(record.DestinationName);
         Assert.Equal("UnknownOperation", record.Reason);
+    }
+
+    // ---- SQL Server unavailable when the audit record must be written (stage 8, assignment 11) ----
+
+    /// <summary>
+    /// Makes every save fail, as when SQL Server is down. Reads still work (configuration is read without
+    /// SaveChanges), so only the audit write fails: exactly the case the audit policy is about.
+    /// </summary>
+    private sealed class FailingSaveInterceptor : SaveChangesInterceptor
+    {
+        public override ValueTask<InterceptionResult<int>> SavingChangesAsync(DbContextEventData eventData,
+            InterceptionResult<int> result, CancellationToken cancellationToken = default) =>
+            throw new InvalidOperationException("Simulated failure: SQL Server is unavailable");
+    }
+
+    /// <summary>A second copy of the app whose DbContext cannot save.</summary>
+    private HttpClient CallerOfAppWithoutAuditStorage(out WebApplicationFactory<Program> app)
+    {
+        app = _factory.WithWebHostBuilder(builder => builder.ConfigureTestServices(services =>
+        {
+            services.RemoveAll<DbContextOptions<ProxyDbContext>>();
+            services.AddDbContext<ProxyDbContext>(options => options
+                .UseSqlServer(_factory.ConnectionString)
+                .AddInterceptors(new FailingSaveInterceptor()));
+        }));
+        return app.CreateClient();
+    }
+
+    private async Task<int> AuditRecordCountAsync(string correlationId)
+    {
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<ProxyDbContext>();
+        return await db.RequestLogs.CountAsync(record => record.CorrelationId == correlationId);
+    }
+
+    [Fact]
+    public async Task Request_is_not_forwarded_when_its_audit_record_cannot_be_saved()
+    {
+        var caller = CallerOfAppWithoutAuditStorage(out var app);
+        using var _ = app;
+
+        var response = await caller.PostAsync(Endpoint, new StringContent(
+            """{"clientId":"customer.get","json":{"urlId":"crm-customers","customerId":"123"}}""",
+            Encoding.UTF8, "application/json"));
+
+        // Mandatory audit before forwarding: no record, so the destination received nothing.
+        await AssertRejectedByProxyAsync(response, HttpStatusCode.ServiceUnavailable, "audit_unavailable");
+        Assert.Equal(0, await AuditRecordCountAsync(CorrelationIdOf(response)));
+    }
+
+    [Fact]
+    public async Task Rejection_is_answered_as_usual_when_its_audit_record_cannot_be_saved()
+    {
+        var caller = CallerOfAppWithoutAuditStorage(out var app);
+        using var _ = app;
+
+        var response = await caller.PostAsync(Endpoint, new StringContent(
+            """{"clientId":"customer.export","json":{"urlId":"crm-customer-export"}}""",
+            Encoding.UTF8, "application/json"));
+
+        // Best-effort audit for rejections: the caller gets the normal 403, not an audit error.
+        // (The record goes to the technical log instead.)
+        await AssertRejectedByProxyAsync(response, HttpStatusCode.Forbidden, "operation_disabled");
+        Assert.Equal(0, await AuditRecordCountAsync(CorrelationIdOf(response)));
     }
 
     private static int FreeLocalPort()

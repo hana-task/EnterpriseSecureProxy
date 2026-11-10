@@ -36,12 +36,13 @@ public sealed class ProxyApplicationFactory : WebApplicationFactory<Program>
     /// </summary>
     public static readonly byte[] PaymentsKey = Enumerable.Range(1, 32).Select(number => (byte)number).ToArray();
 
-    private readonly string _connectionString = TestConnectionString();
+    /// <summary>The test database. Public so a test can register its own DbContext on it (see the audit-failure tests).</summary>
+    public string ConnectionString { get; } = TestConnectionString();
 
     /// <summary>Prepares a fresh test database before the app starts.</summary>
     public ProxyApplicationFactory()
     {
-        var options = new DbContextOptionsBuilder<ProxyDbContext>().UseSqlServer(_connectionString).Options;
+        var options = new DbContextOptionsBuilder<ProxyDbContext>().UseSqlServer(ConnectionString).Options;
         using var db = new ProxyDbContext(options);
 
         db.Database.EnsureDeleted(); // the test database only (see TestConnectionString)
@@ -62,7 +63,7 @@ public sealed class ProxyApplicationFactory : WebApplicationFactory<Program>
         {
             // 1. Database: remove the options Program built (development database) and register the test database.
             services.RemoveAll<DbContextOptions<ProxyDbContext>>();
-            services.AddDbContext<ProxyDbContext>(options => options.UseSqlServer(_connectionString));
+            services.AddDbContext<ProxyDbContext>(options => options.UseSqlServer(ConnectionString));
 
             // 2. Destination: Program registered the "upstream" client with a SocketsHttpHandler (real network).
             //    Configuring the same client name again adds a second setting that runs after the first one,
