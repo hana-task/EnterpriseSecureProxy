@@ -3,6 +3,10 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Features;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging.Abstractions;
+using SecureProxy.Api.Audit;
+using SecureProxy.Api.Data;
 using SecureProxy.Api.Data.Entities;
 using SecureProxy.Api.Forwarding;
 using SecureProxy.Api.Policies;
@@ -11,6 +15,7 @@ using SecureProxy.Api.Security.Encryption;
 using SecureProxy.Api.Validation;
 using SecureProxy.Tests.Forwarding;
 using SecureProxy.Tests.Validation;
+using Serilog.Extensions.Hosting;
 
 namespace SecureProxy.Tests.Proxy;
 
@@ -52,7 +57,20 @@ public class ProxyServiceTests
 
     private ProxyService CreateService(RecordingHandler destination) =>
         new(new RequestValidator(_policies, new AesGcmPayloadDecryptor(new NoKeys())),
-            new UpstreamForwarder(new FakeHttpClientFactory(destination)));
+            new UpstreamForwarder(new FakeHttpClientFactory(destination)),
+            CreateAuditor());
+
+    /// <summary>
+    /// An auditor whose saves always succeed: an in-memory database instead of SQL Server, so these tests
+    /// stay unit tests. The audit records themselves are checked in the integration tests, against SQL Server.
+    /// </summary>
+    private static RequestAuditor CreateAuditor()
+    {
+        var options = new DbContextOptionsBuilder<ProxyDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString()).Options;
+        return new RequestAuditor(new ProxyDbContext(options), new DiagnosticContext(null),
+            NullLogger<RequestAuditor>.Instance);
+    }
 
     private static (DefaultHttpContext Context, MemoryStream ResponseBody) NewContext(string requestBody)
     {

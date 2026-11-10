@@ -579,6 +579,95 @@ public class ProxyEndpointTests : IClassFixture<ProxyApplicationFactory>
         Assert.Matches("^[0-9a-f]{32}$", CorrelationIdOf(response));
     }
 
+    // ---- 17. audit records for successful, rejected and failed requests (stage 8) ----
+
+    /// <summary>
+    /// The RequestLogs row of a request, found by the correlation id the caller got back.
+    /// The body is read to the end first: the test server ends the body only when the whole pipeline has
+    /// finished, so after this the final audit save (at the end of ProxyService) has happened.
+    /// </summary>
+    private async Task<RequestLog> AuditRecordOfAsync(HttpResponseMessage response)
+    {
+        await response.Content.ReadAsStringAsync();
+        var correlationId = CorrelationIdOf(response);
+
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<ProxyDbContext>();
+        return await db.RequestLogs.AsNoTracking().SingleAsync(record => record.CorrelationId == correlationId);
+    }
+
+    [Fact]
+    public async Task Successful_request_is_audited_as_forwarded_with_both_status_codes()
+    {
+        var response = await SendAsync(
+            """{"clientId":"customer.get","json":{"urlId":"crm-customers","customerId":"123"}}""");
+
+        Assert.Single(_destination.Requests);
+        var record = await AuditRecordOfAsync(response);
+
+        Assert.Equal("customer.get", record.OperationKey);
+        Assert.Equal("crm", record.DestinationName);
+        Assert.True(record.WasForwarded);
+        Assert.Equal(200, record.UpstreamStatusCode);
+        Assert.Equal(200, record.ProxyStatusCode);
+        Assert.Equal(RequestOutcome.Success, record.Outcome); // not left InProgress: the end save updated the row
+        Assert.Null(record.Reason);
+        Assert.NotNull(record.CompletedAt);
+        Assert.True(record.CompletedAt >= record.StartedAt);
+        Assert.NotNull(record.DurationMs);
+    }
+
+    [Fact]
+    public async Task Rejected_request_is_audited_as_not_forwarded_with_the_reason()
+    {
+        var response = await SendAsync(
+            """{"clientId":"customer.export","json":{"urlId":"crm-customer-export"}}""");
+
+        await AssertRejectedByProxyAsync(response, HttpStatusCode.Forbidden, "operation_disabled");
+        var record = await AuditRecordOfAsync(response);
+
+        Assert.Equal("customer.export", record.OperationKey);
+        Assert.Equal("crm", record.DestinationName);
+        Assert.False(record.WasForwarded);
+        Assert.Null(record.UpstreamStatusCode);
+        Assert.Equal(403, record.ProxyStatusCode);
+        Assert.Equal(RequestOutcome.Rejected, record.Outcome);
+        Assert.Equal("OperationDisabled", record.Reason);
+        Assert.NotNull(record.CompletedAt);
+    }
+
+    [Fact]
+    public async Task Upstream_error_is_audited_as_a_failed_request()
+    {
+        _destination.Reset(HttpStatusCode.InternalServerError, """{"error":"database down"}""");
+
+        var response = await SendAsync(
+            """{"clientId":"customer.get","json":{"urlId":"crm-customers","customerId":"123"}}""");
+
+        Assert.Single(_destination.Requests);
+        var record = await AuditRecordOfAsync(response);
+
+        Assert.True(record.WasForwarded);
+        Assert.Equal(500, record.UpstreamStatusCode);
+        Assert.Equal(500, record.ProxyStatusCode);
+        Assert.Equal(RequestOutcome.UpstreamError, record.Outcome);
+    }
+
+    [Fact]
+    public async Task Unknown_operation_key_is_audited_with_unsafe_characters_replaced()
+    {
+        // Decision 14: the key is the caller's text, so a line break or markup must not reach the logs.
+        var response = await SendAsync(
+            """{"clientId":"fake\nline<b>","json":{"urlId":"crm-customers"}}""");
+
+        await AssertRejectedByProxyAsync(response, HttpStatusCode.NotFound, "unknown_operation");
+        var record = await AuditRecordOfAsync(response);
+
+        Assert.Equal("fake?line?b?", record.OperationKey);
+        Assert.Null(record.DestinationName);
+        Assert.Equal("UnknownOperation", record.Reason);
+    }
+
     private static int FreeLocalPort()
     {
         var probe = new TcpListener(IPAddress.Loopback, 0);

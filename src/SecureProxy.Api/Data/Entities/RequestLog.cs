@@ -2,7 +2,7 @@ namespace SecureProxy.Api.Data.Entities;
 
 /// <summary>
 /// One audit record per request that reached the proxy, whatever the result (assignment 5.6).
-/// Written explicitly by our code, not by the logging framework.
+/// Written explicitly by our code (RequestAuditor), not by the logging framework.
 /// Never stores bodies, headers, keys, credentials or personal data.
 /// No foreign keys on purpose: the log must survive configuration changes and must also
 /// record requests for operations that do not exist.
@@ -24,7 +24,7 @@ public class RequestLog
     public DateTime? CompletedAt { get; set; }
     public long? DurationMs { get; set; }
 
-    /// <summary>Whether the request actually reached the upstream.</summary>
+    /// <summary>Whether the proxy sent the request to the destination. Set only after sending, never before.</summary>
     public bool WasForwarded { get; set; }
 
     /// <summary>Status returned by the upstream, when it answered.</summary>

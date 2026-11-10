@@ -3,6 +3,12 @@ namespace SecureProxy.Api.Data.Entities;
 /// <summary>The outcome category of one proxy request (assignment 5.6).</summary>
 public enum RequestOutcome
 {
+    /// <summary>
+    /// Saved just before forwarding; replaced by the real outcome when the request ends. A row that stays
+    /// InProgress means the request was about to be sent (or was sent) but its result could not be recorded.
+    /// </summary>
+    InProgress,
+
     /// <summary>Forwarded, and the upstream answered with a success status.</summary>
     Success,
 

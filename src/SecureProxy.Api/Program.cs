@@ -51,7 +51,10 @@ builder.Services.AddHttpClient(UpstreamForwarder.HttpClientName, client => clien
     .ConfigurePrimaryHttpMessageHandler(UpstreamForwarder.CreatePrimaryHandler);
 builder.Services.AddSingleton<UpstreamForwarder>();
 
-// The whole flow of one request. Scoped because the validator it uses is scoped.
+// The audit record of one request, kept in RequestLogs. Scoped: one record per request, and it uses the DbContext.
+builder.Services.AddScoped<RequestAuditor>();
+
+// The whole flow of one request. Scoped because the validator and the auditor it uses are scoped.
 builder.Services.AddScoped<ProxyService>();
 
 // Unexpected exceptions become a generic 500 in the usual error format (see UseExceptionHandler below).

@@ -8,7 +8,7 @@ public class RequestLogConfiguration : IEntityTypeConfiguration<RequestLog>
 {
     public void Configure(EntityTypeBuilder<RequestLog> log)
     {
-        // Not temporal: audit rows are written once and never updated.
+        // Not temporal: a row is saved before forwarding, completed once at the end, and never changed after that.
         log.ToTable("RequestLogs");
 
         log.Property(l => l.CorrelationId).HasMaxLength(64);

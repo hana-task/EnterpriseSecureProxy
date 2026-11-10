@@ -58,6 +58,11 @@ public static class ProxyErrorCatalog
         _ => throw new ArgumentOutOfRangeException(nameof(outcome), outcome, "This outcome is not a proxy error.")
     };
 
+    /// <summary>The audit record could not be saved before forwarding, so the request was not executed (audit policy).</summary>
+    public static ProxyError AuditUnavailable { get; } =
+        new(503, "audit_unavailable", "Service unavailable",
+            "The request could not be recorded, so it was not executed. Try again later.");
+
     /// <summary>Anything unexpected. Deliberately says nothing about what went wrong.</summary>
     public static ProxyError InternalError { get; } =
         new(500, "internal_error", "Internal error", "An unexpected error occurred.");
