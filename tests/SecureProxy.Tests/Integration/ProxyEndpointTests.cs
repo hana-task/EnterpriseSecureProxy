@@ -1,12 +1,14 @@
 using System.Net;
 using System.Text;
 using System.Text.Json;
+using Microsoft.AspNetCore.TestHost;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using SecureProxy.Api.Data;
 using SecureProxy.Api.Data.Entities;
 using SecureProxy.Api.Errors;
 using SecureProxy.Api.Forwarding;
+using SecureProxy.Api.Policies;
 using SecureProxy.Tests.Forwarding;
 
 namespace SecureProxy.Tests.Integration;
@@ -338,5 +340,113 @@ public class ProxyEndpointTests : IClassFixture<ProxyApplicationFactory>
             """{"clientId":"payment.create","json":{"urlId":"payments","accountId":1001,"amount":25.50,"currency":"ILS"}}""");
 
         await AssertRejectedByProxyAsync(response, HttpStatusCode.BadRequest, "encryption_required");
+    }
+
+    // ---- 13. upstream timeout ----
+
+    [Fact]
+    public async Task Destination_that_does_not_answer_in_time_gets_a_504_from_the_proxy()
+    {
+        // The destination waits forever (until it is cancelled). test.slow.get has a 1-second timeout.
+        _destination.Reset(async (_, token) =>
+        {
+            await Task.Delay(Timeout.Infinite, token);
+            return new HttpResponseMessage(HttpStatusCode.OK);
+        });
+
+        var response = await SendAsync("""{"clientId":"test.slow.get","json":{"urlId":"test-slow"}}""");
+
+        // The request was valid, so it did reach the destination; the proxy stopped waiting.
+        Assert.Single(_destination.Requests);
+        Assert.Equal(HttpStatusCode.GatewayTimeout, response.StatusCode);
+        Assert.Equal(ProxyErrorWriter.ProxySourceValue, SourceOf(response));
+        var problem = JsonDocument.Parse(await response.Content.ReadAsStringAsync()).RootElement;
+        Assert.Equal("upstream_timeout", problem.GetProperty("errorCode").GetString());
+    }
+
+    // ---- 14. upstream HTTP error ----
+
+    [Theory]
+    [InlineData(HttpStatusCode.NotFound)]
+    [InlineData(HttpStatusCode.InternalServerError)]
+    [InlineData(HttpStatusCode.ServiceUnavailable)]
+    public async Task Destination_error_status_is_passed_on_as_is_and_marked_as_upstream(HttpStatusCode statusCode)
+    {
+        _destination.Reset(statusCode, "destination error details");
+
+        var response = await SendAsync(
+            """{"clientId":"customer.get","json":{"urlId":"crm-customers","customerId":"123"}}""");
+
+        // The proxy did its job; the error is the destination's own answer, not a proxy failure.
+        Assert.Single(_destination.Requests);
+        Assert.Equal(statusCode, response.StatusCode);
+        Assert.Equal("destination error details", await response.Content.ReadAsStringAsync());
+        Assert.Equal(UpstreamResponseWriter.SourceHeaderValue, SourceOf(response));
+    }
+
+    // ---- 15. cancellation is propagated ----
+
+    [Fact]
+    public async Task Caller_who_cancels_cancels_the_request_to_the_destination()
+    {
+        var destinationReached = new TaskCompletionSource();
+        var destinationCancelled = new TaskCompletionSource();
+        _destination.Reset(async (_, token) =>
+        {
+            destinationReached.SetResult();
+            try
+            {
+                await Task.Delay(Timeout.Infinite, token); // wait until someone cancels
+            }
+            catch (OperationCanceledException)
+            {
+                destinationCancelled.SetResult(); // the caller's cancellation arrived here
+                throw;
+            }
+            return new HttpResponseMessage(HttpStatusCode.OK);
+        });
+
+        using var callerCancellation = new CancellationTokenSource();
+        var sending = _caller.PostAsync(Endpoint, new StringContent(
+            """{"clientId":"customer.get","json":{"urlId":"crm-customers","customerId":"123"}}""",
+            Encoding.UTF8, "application/json"), callerCancellation.Token);
+
+        await destinationReached.Task.WaitAsync(TimeSpan.FromSeconds(5)); // the request is now at the destination
+        callerCancellation.Cancel();                                       // the caller gives up
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => sending);
+        // Completes only if the cancellation travelled caller → proxy → destination.
+        // (customer.get's own timeout is 10 seconds, so this is not the timeout firing.)
+        await destinationCancelled.Task.WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    // ---- unexpected exception (stage 6: the global handler, through the real middleware) ----
+
+    private sealed class FailingPolicyProvider : IPolicyProvider
+    {
+        private static Exception Failure() =>
+            new InvalidOperationException("Cannot open database on sql-prod-07 (internal detail)");
+
+        public Task<OperationPolicy?> FindOperationAsync(string operationKey, CancellationToken cancellationToken) =>
+            throw Failure();
+
+        public Task<ProxySettings> GetSettingsAsync(CancellationToken cancellationToken) => throw Failure();
+
+        public void InvalidateAll() { }
+    }
+
+    [Fact]
+    public async Task Unexpected_exception_becomes_a_generic_500_without_internal_details()
+    {
+        // A second copy of the app in which reading configuration throws (like a database failure).
+        using var failingApp = _factory.WithWebHostBuilder(builder => builder.ConfigureTestServices(
+            services => services.AddScoped<IPolicyProvider, FailingPolicyProvider>()));
+
+        var response = await failingApp.CreateClient().PostAsync(Endpoint, new StringContent(
+            """{"clientId":"customer.get","json":{"urlId":"crm-customers","customerId":"123"}}""",
+            Encoding.UTF8, "application/json"));
+
+        await AssertRejectedByProxyAsync(response, HttpStatusCode.InternalServerError, "internal_error");
+        Assert.DoesNotContain("sql-prod-07", await response.Content.ReadAsStringAsync());
     }
 }

@@ -7,7 +7,6 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
-using Microsoft.Extensions.Hosting;
 using SecureProxy.Api.Data;
 using SecureProxy.Api.Data.Entities;
 using SecureProxy.Api.Forwarding;
@@ -21,8 +20,8 @@ namespace SecureProxy.Tests.Integration;
 /// 2. the destination: the "upstream" HttpClient talks to a RecordingHandler instead of the network.
 /// Everything else (controller, checks, cache, forwarder, error handling) is the production code.
 ///
-/// xUnit creates one instance for the whole test class (IClassFixture), so the app and the database
-/// are built once, not once per test.
+/// xUnit creates one instance for the whole test class (IClassFixture), so the database is prepared
+/// once and the app is started once, not once per test.
 /// </summary>
 public sealed class ProxyApplicationFactory : WebApplicationFactory<Program>
 {
@@ -37,6 +36,19 @@ public sealed class ProxyApplicationFactory : WebApplicationFactory<Program>
     /// </summary>
     public static readonly byte[] PaymentsKey = Enumerable.Range(1, 32).Select(number => (byte)number).ToArray();
 
+    private readonly string _connectionString = TestConnectionString();
+
+    /// <summary>Prepares a fresh test database before the app starts.</summary>
+    public ProxyApplicationFactory()
+    {
+        var options = new DbContextOptionsBuilder<ProxyDbContext>().UseSqlServer(_connectionString).Options;
+        using var db = new ProxyDbContext(options);
+
+        db.Database.EnsureDeleted(); // the test database only (see TestConnectionString)
+        db.Database.Migrate();       // the real migration, so the seed data is there too
+        AddTestConfiguration(db);
+    }
+
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         // Added after the app's own configuration sources, so it wins over a key in the user-secrets.
@@ -50,7 +62,7 @@ public sealed class ProxyApplicationFactory : WebApplicationFactory<Program>
         {
             // 1. Database: remove the options Program built (development database) and register the test database.
             services.RemoveAll<DbContextOptions<ProxyDbContext>>();
-            services.AddDbContext<ProxyDbContext>(options => options.UseSqlServer(TestConnectionString()));
+            services.AddDbContext<ProxyDbContext>(options => options.UseSqlServer(_connectionString));
 
             // 2. Destination: Program registered the "upstream" client with a SocketsHttpHandler (real network).
             //    Configuring the same client name again adds a second setting that runs after the first one,
@@ -60,22 +72,8 @@ public sealed class ProxyApplicationFactory : WebApplicationFactory<Program>
         });
     }
 
-    /// <summary>Runs once, when the app is first started: gives every test run a fresh database.</summary>
-    protected override IHost CreateHost(IHostBuilder builder)
-    {
-        var host = base.CreateHost(builder);
-
-        using var scope = host.Services.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<ProxyDbContext>();
-        db.Database.EnsureDeleted(); // the test database only: the DbContext was replaced above
-        db.Database.Migrate();       // the real migration, so the seed data is there too
-        AddTestOperations(db);
-
-        return host;
-    }
-
     /// <summary>What the tests need and the seed does not have.</summary>
-    private static void AddTestOperations(ProxyDbContext db)
+    private static void AddTestConfiguration(ProxyDbContext db)
     {
         // A text parameter in the path (the seed only has numbers there, which never reach the
         // path traversal check), and a header that is allowed here but on the fixed forbidden list.
@@ -93,6 +91,18 @@ public sealed class ProxyApplicationFactory : WebApplicationFactory<Program>
             {
                 new HeaderRule { HeaderName = "Accept-Language" },
                 new HeaderRule { HeaderName = "Authorization" }
+            }
+        });
+
+        // A destination with a 1-second timeout, so the timeout test does not wait the seed's 10 seconds.
+        db.Operations.Add(new Operation
+        {
+            Key = "test.slow.get", UrlId = "test-slow", HttpMethod = "GET", PathTemplate = "/slow",
+            IsEnabled = true, MaxRequestBytes = 4096, CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
+            Destination = new Destination
+            {
+                Name = "test-slow", BaseUrl = "http://localhost:5199", IsEnabled = true, TimeoutSeconds = 1,
+                MaxResponseBytes = 1_048_576, CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow
             }
         });
 
