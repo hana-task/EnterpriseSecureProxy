@@ -6,9 +6,9 @@ namespace SecureProxy.Tests.Forwarding;
 /// A fake destination: records every request it receives and answers with the given function.
 /// The body is read at the moment of receiving, because the forwarder disposes the request afterwards.
 /// </summary>
-internal sealed class RecordingHandler : HttpMessageHandler
+public sealed class RecordingHandler : HttpMessageHandler
 {
-    private readonly Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> _respond;
+    private Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> _respond;
 
     public RecordingHandler(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> respond)
     {
@@ -16,11 +16,27 @@ internal sealed class RecordingHandler : HttpMessageHandler
     }
 
     public RecordingHandler(HttpStatusCode statusCode, string body = "")
-        : this((_, _) => Task.FromResult(new HttpResponseMessage(statusCode) { Content = new StringContent(body) }))
+        : this(Answer(statusCode, body))
     {
     }
 
     public List<RecordedRequest> Requests { get; } = new();
+
+    /// <summary>
+    /// Forgets all recorded requests and sets how to answer from now on. The integration tests share one
+    /// instance (the app keeps the handler it was given), so each test calls this before it starts.
+    /// </summary>
+    public void Reset(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> respond)
+    {
+        Requests.Clear();
+        _respond = respond;
+    }
+
+    public void Reset(HttpStatusCode statusCode, string body = "") => Reset(Answer(statusCode, body));
+
+    private static Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> Answer(
+        HttpStatusCode statusCode, string body) =>
+        (_, _) => Task.FromResult(new HttpResponseMessage(statusCode) { Content = new StringContent(body) });
 
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
@@ -33,7 +49,7 @@ internal sealed class RecordingHandler : HttpMessageHandler
     }
 }
 
-internal sealed record RecordedRequest(
+public sealed record RecordedRequest(
     string Method, Uri Url, string? Body, string? ContentType, IReadOnlyDictionary<string, string> Headers);
 
 /// <summary>Hands out clients that talk to the given handler instead of the network.</summary>

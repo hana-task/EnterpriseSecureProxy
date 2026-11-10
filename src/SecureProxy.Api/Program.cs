@@ -72,3 +72,7 @@ app.UseAuthorization();
 app.MapControllers();
 
 app.Run();
+
+// Makes the compiler-generated Program class public, so the integration tests can start this app
+// with WebApplicationFactory<Program>. It adds no behaviour.
+public partial class Program { }
