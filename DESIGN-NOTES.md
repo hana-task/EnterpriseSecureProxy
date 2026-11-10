@@ -248,7 +248,7 @@ the proxy marker, because its headers pass an allowlist.
 - `errorCode` is fixed and documented, so callers do not parse messages.
 - `detail` is the rejection's safe message: never a value sent by the caller, a hostname, configuration or
   encryption detail.
-- `correlationId` is the ASP.NET request id for now; stage 8 replaces its source in one place.
+- `correlationId` is the request's correlation id (see "Audit and logging"), also returned in `X-Correlation-ID`.
 - The response is cleared before an error is written, so no header set earlier can leak into it.
 
 ### Mapping (`ProxyErrorCatalog`, the single place for it)
@@ -270,8 +270,9 @@ the proxy marker, because its headers pass an allowlist.
 | Destination unreachable | 502 | `upstream_unreachable` |
 | Destination response over its limit | 502 | `upstream_response_too_large` |
 | Destination answered (any status, also 4xx/5xx) | destination's status | none: the answer is passed on |
-| Caller disconnected | nothing is sent | (audited in stage 8) |
+| Caller disconnected | nothing is sent | none (audited as `CallerCancelled`) |
 | Unexpected exception | 500 | `internal_error` |
+| Audit record cannot be saved before forwarding | 503 | `audit_unavailable` |
 | Stale configuration update | 409 | `concurrency_conflict` (admin endpoint, stage 9) |
 
 A "missing destination" cannot occur: every operation has a required foreign key to a destination.
@@ -302,6 +303,87 @@ The `Server` response header is turned off so the server software is not announc
   proxy endpoint.
 - When the configuration database is unreachable the request fails closed with 500; the audit behaviour for that
   case is defined in the audit section.
+
+## Audit and logging (assignment 5.6, 11)
+
+There are two logs with different jobs:
+
+| | Audit log (`RequestLogs` in SQL Server) | Technical log (Serilog) |
+|---|---|---|
+| Question it answers | Who asked for what, when, and was it executed? | Why did the system misbehave? |
+| Written by | Our code, explicitly (`RequestAuditor`, EF Core) | Any `ILogger` call; Serilog sends it to its sinks |
+| Content | The fixed fields of 5.6 only | One summary line per request, warnings, exceptions, audit fallback |
+| Reliability | We know whether the save succeeded, so forwarding can depend on it | Best-effort, written in the background |
+| Output | Table | Console (readable) and a daily JSON file `logs/proxy-YYYYMMDD.log`, 14 days kept |
+
+A logging sink that writes to a database is not used for the audit: it writes in the background and in batches,
+so the code cannot know that a record was stored before it forwards a request.
+
+### Correlation id
+
+`CorrelationIdMiddleware` runs first. It takes the caller's `X-Correlation-ID` when it is 1–64 characters of
+letters, digits, `-`, `_` and `.`; otherwise it creates a new id (a Guid). The id is stored in
+`HttpContext.TraceIdentifier`, so the error writer and the exception handler use it without change. It is
+returned in `X-Correlation-ID` on every response (added when the response starts, after the error writer clears
+the headers), put in a logging scope so every log line carries it, and saved in the audit row. It is not
+forwarded to the destination. A caller-supplied id is only a search key and grants nothing; it is not unique, so
+an investigation by such an id may find several rows and also uses `StartedAt`.
+
+### Audit policy
+
+Every request handled by `ProxyService` gets one row.
+
+| Request | When the row is saved | If SQL Server is unavailable |
+|---|---|---|
+| Passes the checks (will be forwarded) | **Before** sending, with `Outcome = InProgress` and `WasForwarded = false`; the same row is updated at the end with the real outcome | **Mandatory, fail closed:** the request is not forwarded and the caller gets 503 `audit_unavailable`. If only the final update fails, the row stays `InProgress` and the full record goes to the technical log |
+| Rejected, cancelled or failed before forwarding | Once, at the end | **Best-effort:** the caller gets the normal answer; the full record goes to the technical log |
+
+Reasoning: a forwarded request may change something at the destination (a payment), so it must never run
+without a trace. A rejection changed nothing, so blocking it would only reduce availability. The operational
+consequence is deliberate: while SQL Server is down the proxy executes no operations (it chooses traceability over
+availability), and alerting on the `audit_unavailable` error log line is needed. The configuration is also read
+from SQL Server, so in practice only cached configuration keeps rejections working during an outage.
+
+Alternatives considered: a local buffer or an outbox table (record locally, ship later) would keep the proxy
+available during an outage, at the cost of a component that can itself lose data if the server fails. Left out for
+the scope of this assignment.
+
+Both saves use `CancellationToken.None`: once the request is handled it is recorded, even if the caller has left.
+The final save runs in a `finally` block, so success, rejection, cancellation and unexpected exceptions are all
+recorded. Saving twice adds a few milliseconds to a forwarded request, small next to the destination call.
+
+### What a row contains
+
+| Field | Value |
+|---|---|
+| `OperationKey` | From the configuration when the operation was found; otherwise the caller's text with every character other than letters, digits, `.`, `_`, `-` replaced by `?` (no line breaks or markup in logs). Null when the envelope was invalid |
+| `DestinationName` | The destination's unique name (not its URL) |
+| `WasForwarded` | Set only after sending, never before |
+| `UpstreamStatusCode` / `ProxyStatusCode` | The destination's status when it answered / what the caller got (null when the caller left) |
+| `Outcome` | `Success`, `Rejected`, `UpstreamError` (4xx/5xx or response too large), `UpstreamTimeout`, `UpstreamUnavailable`, `CallerCancelled`, `ProxyError`, or `InProgress` |
+| `Reason` | A fixed code: the `RejectionReason` or `ForwardOutcome` name, `AuditUnavailable`, `UnhandledException` |
+
+Never stored or logged: bodies, headers (so no authorization, cookies or API keys), the destination URL (it may
+contain parameter values such as a customer id), parameter values, encryption keys, the rejection's message, or an
+exception message. EF Core's sensitive data logging is off, so SQL parameter values are not logged either.
+
+### Technical log content
+
+- One line per request (`UseSerilogRequestLogging`): method, path (no query string), status, duration, plus the
+  audit's `OperationKey`, `Outcome` and `Reason`, and the correlation id.
+- A warning with the cause when a destination cannot be reached (the audit says only `UpstreamUnavailable`).
+- Unexpected exceptions with full detail (internal log only).
+- An error line with the whole record when an audit save fails (the fallback).
+- Framework categories (ASP.NET, EF Core, HttpClient) only from warning level.
+
+### Known limitations
+
+- Requests that never reach `ProxyService` (an ASP.NET 404/405) are only in the technical log's summary line,
+  not in `RequestLogs`.
+- If the save before forwarding reaches the database but the connection drops before it is confirmed, the final
+  save inserts a second row for the same request. The request is still not forwarded, so the error is on the safe
+  side.
+- The audit fallback in the technical log was verified by reading the log file, not by an automated test.
 
 ## Testing
 
@@ -343,3 +425,19 @@ handler against a real server found a real defect (tracing headers added by .NET
 
 The absence of the `Server` header is a Kestrel setting; the TestServer never sends that header, so it is not
 covered by a test.
+
+### Audit tests
+
+The audit tests (assignment test 17) send a request, read the answer to the end and then load the `RequestLogs`
+row by the correlation id the caller got back. Reading to the end matters: the test server ends the response body
+only when the whole pipeline has finished, so the final audit save has happened. They cover a success, a
+rejection, a destination error, a timeout and an unknown operation key with unsafe characters.
+
+SQL Server being unavailable is simulated with an EF Core `SaveChangesInterceptor` that throws on every save, in a
+second copy of the app (`WithWebHostBuilder`). Reads still work, so only the audit write fails, which is exactly
+the case the policy is about. Stopping the database would also break reading the configuration and the other
+tests. Two tests show the policy: a valid request is not forwarded (503, the destination received nothing), and a
+rejection is answered as usual (403).
+
+The `ProxyService` unit tests give the auditor an EF Core in-memory database, only so its saves succeed without a
+server; the audit rows themselves are checked against SQL Server in the integration tests.
