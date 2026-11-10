@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using SecureProxy.Api.Audit;
 using SecureProxy.Api.Data;
 using SecureProxy.Api.Data.Repositories;
 using SecureProxy.Api.Errors;
@@ -54,7 +55,11 @@ builder.Services.AddSwaggerGen();
 
 var app = builder.Build();
 
-// First in the pipeline, so it catches exceptions from everything after it.
+// First of all: the correlation id must be set before anything logs or answers, including the
+// exception handler below (its 500 answer carries the id too).
+app.UseMiddleware<CorrelationIdMiddleware>();
+
+// Next, so it catches exceptions from everything after it.
 // The empty lambda only satisfies a .NET 8 startup check; the registered UnhandledExceptionHandler does the work.
 app.UseExceptionHandler(_ => { });
 

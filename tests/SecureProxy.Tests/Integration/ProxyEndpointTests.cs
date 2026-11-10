@@ -7,6 +7,7 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using SecureProxy.Api.Audit;
 using SecureProxy.Api.Data;
 using SecureProxy.Api.Data.Entities;
 using SecureProxy.Api.Errors;
@@ -521,6 +522,61 @@ public class ProxyEndpointTests : IClassFixture<ProxyApplicationFactory>
         Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
         Assert.Null(response.Headers.Location);
         Assert.Equal(UpstreamResponseWriter.SourceHeaderValue, SourceOf(response));
+    }
+
+    // ---- correlation id (stage 8) ----
+
+    private static string CorrelationIdOf(HttpResponseMessage response) =>
+        string.Join(",", response.Headers.GetValues(CorrelationIdMiddleware.HeaderName));
+
+    [Fact]
+    public async Task Proxy_error_carries_a_new_correlation_id_in_the_header_and_in_the_body()
+    {
+        var response = await SendAsync(
+            """{"clientId":"customer.delete","json":{"urlId":"crm-customers","customerId":"123"}}""");
+
+        // The caller sent no id, so the proxy created one (a Guid without dashes).
+        var correlationId = CorrelationIdOf(response);
+        Assert.Matches("^[0-9a-f]{32}$", correlationId);
+
+        var problem = JsonDocument.Parse(await response.Content.ReadAsStringAsync()).RootElement;
+        Assert.Equal(correlationId, problem.GetProperty("correlationId").GetString());
+    }
+
+    [Fact]
+    public async Task Caller_correlation_id_is_kept_and_returned_with_the_destination_answer()
+    {
+        var request = new HttpRequestMessage(HttpMethod.Post, Endpoint)
+        {
+            Content = new StringContent("""{"clientId":"customer.get","json":{"urlId":"crm-customers","customerId":"123"}}""",
+                Encoding.UTF8, "application/json")
+        };
+        request.Headers.Add(CorrelationIdMiddleware.HeaderName, "caller-order-42");
+
+        var response = await _caller.SendAsync(request);
+
+        // The id is not forwarded: it is not in the operation's allowed headers.
+        var received = Assert.Single(_destination.Requests);
+        Assert.False(received.Headers.ContainsKey(CorrelationIdMiddleware.HeaderName));
+
+        // The destination never saw the id, so the proxy is the one that put it on the answer (OnStarting).
+        Assert.Equal(UpstreamResponseWriter.SourceHeaderValue, SourceOf(response));
+        Assert.Equal("caller-order-42", CorrelationIdOf(response));
+    }
+
+    [Fact]
+    public async Task Invalid_caller_correlation_id_is_replaced_by_a_new_one()
+    {
+        var request = new HttpRequestMessage(HttpMethod.Post, Endpoint)
+        {
+            Content = new StringContent("""{"clientId":"customer.delete","json":{"urlId":"crm-customers"}}""",
+                Encoding.UTF8, "application/json")
+        };
+        request.Headers.TryAddWithoutValidation(CorrelationIdMiddleware.HeaderName, "<script>alert(1)</script>");
+
+        var response = await _caller.SendAsync(request);
+
+        Assert.Matches("^[0-9a-f]{32}$", CorrelationIdOf(response));
     }
 
     private static int FreeLocalPort()

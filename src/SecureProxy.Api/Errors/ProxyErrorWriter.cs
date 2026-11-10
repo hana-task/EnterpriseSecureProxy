@@ -33,6 +33,6 @@ public static class ProxyErrorWriter
             response.HttpContext.RequestAborted);
     }
 
-    /// <summary>For now the ASP.NET request id. Stage 8 replaces this with the real correlation id.</summary>
+    /// <summary>CorrelationIdMiddleware stores the correlation id in TraceIdentifier.</summary>
     private static string CorrelationId(HttpContext context) => context.TraceIdentifier;
 }
