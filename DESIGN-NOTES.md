@@ -197,7 +197,7 @@ caller can tell a destination answer from a proxy-generated failure.
 
 | Topic | Decision |
 |---|---|
-| HttpClient | One named client from `IHttpClientFactory` (pooled connections, rotated so DNS changes are noticed). Its own `Timeout` is infinite because the timeout is per destination and must be distinguishable from a caller cancel. Redirects are not followed (`AllowAutoRedirect = false`): a destination must not be able to send the proxy to another host (SSRF). A 3xx is passed on as the destination's answer, without its `Location` header. |
+| HttpClient | One named client from `IHttpClientFactory` (pooled connections, rotated so DNS changes are noticed). Its own `Timeout` is infinite because the timeout is per destination and must be distinguishable from a caller cancel. Redirects are not followed (`AllowAutoRedirect = false`): a destination must not be able to send the proxy to another host (SSRF). A 3xx is passed on as the destination's answer, without its `Location` header. The handler also adds no tracing headers (`traceparent` etc.): .NET adds them by default, with a trace id that can come from the caller, which would bypass the header allowlist. Both settings live in `UpstreamForwarder.CreatePrimaryHandler`. |
 | Timeout (test 13) | `Destination.TimeoutSeconds`, applied with a linked `CancellationTokenSource` (caller's `RequestAborted` + `CancelAfter`). It covers the headers **and** the body: a destination that answers and then stalls is cut off too. There is no per-operation timeout (left out on purpose, see the data model). |
 | Caller cancel vs timeout (tests 13, 15) | Both surface as `OperationCanceledException`. The caller's own token decides: cancelled means the caller left (`CallerCancelled`), otherwise the destination timed out (504). The linked token is passed to `SendAsync` and to every body read, so the cancel reaches the outgoing call. |
 | Response size limit | `Destination.MaxResponseBytes`. A declared `Content-Length` over the limit is refused before anything is sent. Otherwise the bytes are counted while streaming (a destination may not declare a size, or may lie). Status and headers are written only when the first chunk arrives, so an early failure still lets the controller send a clean error. If the limit is exceeded after sending started, the connection is aborted: a broken response is better than a truncated one that looks complete. |
@@ -302,3 +302,44 @@ The `Server` response header is turned off so the server software is not announc
   proxy endpoint.
 - When the configuration database is unreachable the request fails closed with 500; the audit behaviour for that
   case is defined in the audit section.
+
+## Testing
+
+Two layers, both xUnit:
+
+- **Unit tests** check one class at a time (each check, the decryptor, the forwarder, the error mapping), with
+  fakes and no database or HTTP server.
+- **Integration tests** (`tests/SecureProxy.Tests/Integration`) cover the required scenarios of assignment
+  section 12 through the whole application: HTTP request → controller → checks with configuration read from SQL
+  Server → destination → HTTP answer.
+
+### How the integration tests run
+
+`ProxyApplicationFactory` (`WebApplicationFactory<Program>`) starts the real `Program.cs` in memory on a TestServer
+and changes only:
+
+| What | Production | Tests |
+|---|---|---|
+| Database | `SecureProxy` | `SecureProxy_Tests` on the same SQL Server: the developer's connection string with only the database name changed. It is deleted and rebuilt with the real migration once per test run, so the seed data is the starting point; a few test-only operations are added (a text path parameter, a 1-second timeout). |
+| Destination | `SocketsHttpHandler` (network) | `RecordingHandler`: the "upstream" client is configured again in `ConfigureTestServices`, which runs after `Program`, so its primary handler replaces the real one. It records every request and answers as each test sets. |
+| Encryption key | user-secrets / environment | A fixed test key in in-memory configuration, read through the same `ConfigurationKeySource`. |
+
+A real SQL Server is used rather than SQLite or the EF in-memory provider: `rowversion` (assignment test 16),
+temporal tables and the check constraints only exist there, and the real repository queries are exercised.
+The database must be running (see README).
+
+### Proof that a rejected request was blocked
+
+Every rejection test asserts that the recording destination received **nothing**, before it checks the status,
+`X-Proxy-Source: proxy` and the `errorCode`. A status code alone would not show that the request was stopped
+before it was sent.
+
+### What the recording destination cannot show
+
+The `RecordingHandler` replaces the network handler, so behaviour of that handler itself is invisible to it. One
+test therefore puts the production handler (`UpstreamForwarder.CreatePrimaryHandler`) back and sends to a real
+local HTTP server: it checks that no redirect is followed and that only allowed headers arrive. Checking that
+handler against a real server found a real defect (tracing headers added by .NET), listed in DEFECT-REPORT.
+
+The absence of the `Server` header is a Kestrel setting; the TestServer never sends that header, so it is not
+covered by a test.
