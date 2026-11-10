@@ -8,8 +8,17 @@ using SecureProxy.Api.Policies;
 using SecureProxy.Api.Proxy;
 using SecureProxy.Api.Security.Encryption;
 using SecureProxy.Api.Validation;
+using Serilog;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// The technical log (decision 12): Serilog, configured in appsettings.json ("Serilog" section).
+// Console for people, a daily JSON file for tools. FromLogContext adds the scope values, such as the
+// CorrelationId of CorrelationIdMiddleware, to every line. Not the audit log: that is RequestLogs in SQL Server.
+builder.Host.UseSerilog((context, services, logger) => logger
+    .ReadFrom.Configuration(context.Configuration)
+    .ReadFrom.Services(services)
+    .Enrich.FromLogContext());
 
 // Do not announce the server software ("Server: Kestrel") in every response.
 builder.WebHost.ConfigureKestrel(options => options.AddServerHeader = false);
@@ -58,6 +67,10 @@ var app = builder.Build();
 // First of all: the correlation id must be set before anything logs or answers, including the
 // exception handler below (its 500 answer carries the id too).
 app.UseMiddleware<CorrelationIdMiddleware>();
+
+// One summary line per request: method, path (no query string), status, duration. No headers, no body.
+// Placed before the exception handler, so for an unexpected exception it logs the final 500.
+app.UseSerilogRequestLogging();
 
 // Next, so it catches exceptions from everything after it.
 // The empty lambda only satisfies a .NET 8 startup check; the registered UnhandledExceptionHandler does the work.

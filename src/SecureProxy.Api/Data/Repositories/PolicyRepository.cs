@@ -20,8 +20,11 @@ public sealed class PolicyRepository : IPolicyRepository
         // One SQL query that reads the operation together with its destination, rules and headers,
         // and copies the values straight into the read-only policy objects.
         // AsNoTracking: we only read; EF does not need to watch these rows for changes.
+        // AsSingleQuery: one round trip on purpose. An operation has only a few rules and headers, so the
+        // repeated rows of a single JOIN cost less than extra queries (and EF warns when it is not stated).
         var policy = await _db.Operations
             .AsNoTracking()
+            .AsSingleQuery()
             .Where(operation => operation.Key == operationKey)
             .Select(operation => new OperationPolicy
             {
