@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text;
 using SecureProxy.Api.Policies;
 
@@ -21,6 +22,19 @@ public sealed class UpstreamForwarder
     {
         _httpClientFactory = httpClientFactory;
     }
+
+    /// <summary>
+    /// The network handler of the "upstream" client (registered in Program):
+    /// - redirects are not followed, so a destination cannot send the proxy to another host (SSRF);
+    /// - no tracing headers (traceparent, tracestate, baggage) are added. .NET adds them by default, and
+    ///   their value can come from the caller's own traceparent, so the caller would control a header
+    ///   that is not on the operation's allowlist.
+    /// </summary>
+    public static SocketsHttpHandler CreatePrimaryHandler() => new()
+    {
+        AllowAutoRedirect = false,
+        ActivityHeadersPropagator = DistributedContextPropagator.CreateNoOutputPropagator()
+    };
 
     public async Task<ForwardResult> SendAsync(
         UpstreamRequest request, DestinationPolicy destination, CancellationToken cancellationToken)

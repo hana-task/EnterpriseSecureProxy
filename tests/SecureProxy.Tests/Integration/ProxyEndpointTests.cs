@@ -1,6 +1,9 @@
+using System.Collections.Specialized;
 using System.Net;
+using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
+using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -448,5 +451,84 @@ public class ProxyEndpointTests : IClassFixture<ProxyApplicationFactory>
 
         await AssertRejectedByProxyAsync(response, HttpStatusCode.InternalServerError, "internal_error");
         Assert.DoesNotContain("sql-prod-07", await response.Content.ReadAsStringAsync());
+    }
+
+    // ---- the real network handler (what the RecordingHandler cannot show, because it replaces it) ----
+
+    [Fact]
+    public async Task Real_network_handler_adds_no_tracing_headers_and_follows_no_redirects()
+    {
+        // 1. A real HTTP server on a free local port. It records every request and answers with a redirect.
+        var port = FreeLocalPort();
+        var received = new List<(string Path, NameValueCollection Headers)>();
+        using var server = new HttpListener();
+        server.Prefixes.Add($"http://localhost:{port}/");
+        server.Start();
+        _ = Task.Run(async () =>
+        {
+            while (server.IsListening)
+            {
+                var exchange = await server.GetContextAsync();
+                received.Add((exchange.Request.Url!.AbsolutePath, exchange.Request.Headers));
+                exchange.Response.StatusCode = 302;
+                exchange.Response.RedirectLocation = $"http://localhost:{port}/redirected";
+                exchange.Response.Close();
+            }
+        });
+
+        // 2. An operation whose destination is that server.
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ProxyDbContext>();
+            db.Operations.Add(new Operation
+            {
+                Key = "test.real.get", UrlId = "test-real", HttpMethod = "GET", PathTemplate = "/start",
+                IsEnabled = true, MaxRequestBytes = 4096, CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
+                HeaderRules = { new HeaderRule { HeaderName = "Accept-Language" } },
+                Destination = new Destination
+                {
+                    Name = "test-real", BaseUrl = $"http://localhost:{port}", IsEnabled = true, TimeoutSeconds = 5,
+                    MaxResponseBytes = 1_048_576, CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow
+                }
+            });
+            await db.SaveChangesAsync();
+        }
+
+        // 3. A copy of the app with the production network handler put back in place of the RecordingHandler.
+        using var realNetworkApp = _factory.WithWebHostBuilder(builder => builder.ConfigureTestServices(services =>
+            services.AddHttpClient(UpstreamForwarder.HttpClientName)
+                .ConfigurePrimaryHttpMessageHandler(UpstreamForwarder.CreatePrimaryHandler)));
+        var caller = realNetworkApp.CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false });
+
+        var request = new HttpRequestMessage(HttpMethod.Post, Endpoint)
+        {
+            Content = new StringContent("""{"clientId":"test.real.get","json":{"urlId":"test-real"}}""",
+                Encoding.UTF8, "application/json")
+        };
+        request.Headers.Add("Accept-Language", "he-IL");
+        request.Headers.Add("traceparent", "00-11111111111111111111111111111111-2222222222222222-01");
+        var response = await caller.SendAsync(request);
+
+        // Exactly one request reached the server: the redirect to /redirected was not followed.
+        var (path, headers) = Assert.Single(received);
+        Assert.Equal("/start", path);
+
+        // Only the allowed header; no tracing header (before the fix, the caller's trace id arrived here).
+        Assert.Equal("he-IL", headers["Accept-Language"]);
+        Assert.Null(headers["traceparent"]);
+
+        // The caller gets the destination's 302, without its Location (an internal address).
+        Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
+        Assert.Null(response.Headers.Location);
+        Assert.Equal(UpstreamResponseWriter.SourceHeaderValue, SourceOf(response));
+    }
+
+    private static int FreeLocalPort()
+    {
+        var probe = new TcpListener(IPAddress.Loopback, 0);
+        probe.Start();
+        var port = ((IPEndPoint)probe.LocalEndpoint).Port;
+        probe.Stop();
+        return port;
     }
 }
