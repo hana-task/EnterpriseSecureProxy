@@ -368,6 +368,14 @@ public class ProxyEndpointTests : IClassFixture<ProxyApplicationFactory>
         Assert.Equal(ProxyErrorWriter.ProxySourceValue, SourceOf(response));
         var problem = JsonDocument.Parse(await response.Content.ReadAsStringAsync()).RootElement;
         Assert.Equal("upstream_timeout", problem.GetProperty("errorCode").GetString());
+
+        // The audit tells "forwarded, no answer" apart from a rejection: no upstream status, the proxy's 504.
+        var record = await AuditRecordOfAsync(response);
+        Assert.True(record.WasForwarded);
+        Assert.Null(record.UpstreamStatusCode);
+        Assert.Equal(504, record.ProxyStatusCode);
+        Assert.Equal(RequestOutcome.UpstreamTimeout, record.Outcome);
+        Assert.Equal("Timeout", record.Reason);
     }
 
     // ---- 14. upstream HTTP error ----

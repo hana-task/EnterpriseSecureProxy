@@ -1,4 +1,5 @@
 using System.Net;
+using Microsoft.Extensions.Logging.Abstractions;
 using SecureProxy.Api.Forwarding;
 using SecureProxy.Tests.Validation;
 
@@ -8,7 +9,8 @@ public class UpstreamForwarderTests
 {
     private static readonly Uri CustomerUrl = new("http://localhost:5101/customers/123");
 
-    private static UpstreamForwarder ForwarderFor(HttpMessageHandler handler) => new(new FakeHttpClientFactory(handler));
+    private static UpstreamForwarder ForwarderFor(HttpMessageHandler handler) =>
+        new(new FakeHttpClientFactory(handler), NullLogger<UpstreamForwarder>.Instance);
 
     // ---- sending ----
 

@@ -17,10 +17,12 @@ public sealed class UpstreamForwarder
     public const string HttpClientName = "upstream";
 
     private readonly IHttpClientFactory _httpClientFactory;
+    private readonly ILogger<UpstreamForwarder> _logger;
 
-    public UpstreamForwarder(IHttpClientFactory httpClientFactory)
+    public UpstreamForwarder(IHttpClientFactory httpClientFactory, ILogger<UpstreamForwarder> logger)
     {
         _httpClientFactory = httpClientFactory;
+        _logger = logger;
     }
 
     /// <summary>
@@ -67,9 +69,11 @@ public sealed class UpstreamForwarder
                     var response = await client.SendAsync(message, HttpCompletionOption.ResponseHeadersRead, timeoutSource.Token);
                     return ForwardResult.Responded(response, timeoutSource);
                 }
-                catch (HttpRequestException) when (attempt < maxAttempts)
+                catch (HttpRequestException exception) when (attempt < maxAttempts)
                 {
                     // Connection failure: go around the loop once more.
+                    _logger.LogWarning(exception, "Destination {DestinationName} could not be reached; retrying once",
+                        destination.Name);
                 }
             }
         }
@@ -83,8 +87,11 @@ public sealed class UpstreamForwarder
                 ? ForwardOutcome.CallerCancelled
                 : ForwardOutcome.Timeout);
         }
-        catch (HttpRequestException)
+        catch (HttpRequestException exception)
         {
+            // The audit log only says "UpstreamUnavailable"; the cause (DNS, refused, TLS...) is kept here.
+            // The exception names the host and port, never parameter values or headers.
+            _logger.LogWarning(exception, "Destination {DestinationName} could not be reached", destination.Name);
             timeoutSource.Dispose();
             return ForwardResult.Failed(ForwardOutcome.ConnectionFailed);
         }

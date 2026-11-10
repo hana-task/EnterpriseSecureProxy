@@ -57,7 +57,7 @@ public class ProxyServiceTests
 
     private ProxyService CreateService(RecordingHandler destination) =>
         new(new RequestValidator(_policies, new AesGcmPayloadDecryptor(new NoKeys())),
-            new UpstreamForwarder(new FakeHttpClientFactory(destination)),
+            new UpstreamForwarder(new FakeHttpClientFactory(destination), NullLogger<UpstreamForwarder>.Instance),
             CreateAuditor());
 
     /// <summary>

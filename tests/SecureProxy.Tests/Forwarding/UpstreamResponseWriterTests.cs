@@ -1,6 +1,7 @@
 using System.Net;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Features;
+using Microsoft.Extensions.Logging.Abstractions;
 using SecureProxy.Api.Forwarding;
 using SecureProxy.Tests.Validation;
 
@@ -16,7 +17,7 @@ public class UpstreamResponseWriterTests
     {
         var handler = new RecordingHandler((_, _) => Task.FromResult(destinationResponse));
         var destination = TestData.CustomerGetPolicy().Destination with { TimeoutSeconds = timeoutSeconds };
-        return await new UpstreamForwarder(new FakeHttpClientFactory(handler))
+        return await new UpstreamForwarder(new FakeHttpClientFactory(handler), NullLogger<UpstreamForwarder>.Instance)
             .SendAsync(new UpstreamRequest("GET", CustomerUrl, null), destination, callerToken);
     }
 
