@@ -57,6 +57,20 @@ public class ProxyErrorCatalogTests
         Assert.Equal(expectedStatus, ProxyErrorCatalog.ForForwardFailure(outcome).StatusCode);
     }
 
+    [Fact]
+    public void Admin_errors_get_the_documented_status_and_code()
+    {
+        Assert.Equal((401, "admin_unauthorized"),
+            (ProxyErrorCatalog.AdminUnauthorized.StatusCode, ProxyErrorCatalog.AdminUnauthorized.ErrorCode));
+        Assert.Equal((404, "unknown_operation"),
+            (ProxyErrorCatalog.AdminUnknownOperation.StatusCode, ProxyErrorCatalog.AdminUnknownOperation.ErrorCode));
+        Assert.Equal((409, "concurrency_conflict"),
+            (ProxyErrorCatalog.ConcurrencyConflict.StatusCode, ProxyErrorCatalog.ConcurrencyConflict.ErrorCode));
+
+        var invalid = ProxyErrorCatalog.InvalidAdminRequest("safe message");
+        Assert.Equal((400, "invalid_admin_request", "safe message"), (invalid.StatusCode, invalid.ErrorCode, invalid.Detail));
+    }
+
     [Theory]
     [InlineData(ForwardOutcome.Responded)]
     [InlineData(ForwardOutcome.CallerCancelled)]

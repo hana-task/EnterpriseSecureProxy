@@ -63,6 +63,28 @@ public static class ProxyErrorCatalog
         new(503, "audit_unavailable", "Service unavailable",
             "The request could not be recorded, so it was not executed. Try again later.");
 
+    // ---- Admin API (configuration updates) ----
+
+    /// <summary>The admin key is missing or wrong, or no admin key is configured on the server.</summary>
+    public static ProxyError AdminUnauthorized { get; } =
+        new(401, "admin_unauthorized", "Unauthorized", "A valid admin key is required.");
+
+    /// <summary>The admin API was asked about an operation key that does not exist.</summary>
+    public static ProxyError AdminUnknownOperation { get; } =
+        new(404, "unknown_operation", "Unknown operation", "The requested operation does not exist.");
+
+    /// <summary>
+    /// The update was based on an old version of the configuration (rowversion mismatch),
+    /// so it was not applied. The caller should read the current version and try again.
+    /// </summary>
+    public static ProxyError ConcurrencyConflict { get; } =
+        new(409, "concurrency_conflict", "Concurrency conflict",
+            "The configuration was changed by someone else. Read it again and retry the update.");
+
+    /// <summary>The admin request body is not valid. The message is ours (never a caller value).</summary>
+    public static ProxyError InvalidAdminRequest(string safeMessage) =>
+        new(400, "invalid_admin_request", "Invalid request", safeMessage);
+
     /// <summary>Anything unexpected. Deliberately says nothing about what went wrong.</summary>
     public static ProxyError InternalError { get; } =
         new(500, "internal_error", "Internal error", "An unexpected error occurred.");

@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using SecureProxy.Api.Admin;
 using SecureProxy.Api.Audit;
 using SecureProxy.Api.Data;
 using SecureProxy.Api.Data.Repositories;
@@ -56,6 +57,9 @@ builder.Services.AddScoped<RequestAuditor>();
 
 // The whole flow of one request. Scoped because the validator and the auditor it uses are scoped.
 builder.Services.AddScoped<ProxyService>();
+
+// The admin API key check (the admin controller uses it through [ServiceFilter]). No per-request state.
+builder.Services.AddSingleton<AdminKeyFilter>();
 
 // Unexpected exceptions become a generic 500 in the usual error format (see UseExceptionHandler below).
 builder.Services.AddExceptionHandler<UnhandledExceptionHandler>();
