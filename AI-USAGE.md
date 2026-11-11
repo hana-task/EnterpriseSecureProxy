@@ -17,5 +17,6 @@ I remain responsible for the full solution. I reviewed, ran and understood all A
 | Endpoint and error handling | Planning the structure with me, generating the code and unit tests, and a code review against assignment section 7. I chose the status codes after the options were explained. |
 | Integration tests | Planning the test setup with me, generating the integration tests for the required scenarios and a review against assignment section 9. |
 | Audit and logging | Planning the audit policy with me, generating the correlation id, Serilog setup, the audit recorder and their tests, and a review against assignment sections 5.6 and 11. I chose the policy after the options were explained. |
+| Configuration updates | Planning the admin API, the rowversion conflict handling and cache clearing with me, generating the code and tests, and a review against assignment sections 5.7 and 6. I chose the simplest options after they were explained. The review found a real defect (a request the server refused to read became a 500), fixed with a test and listed in DEFECT-REPORT. |
 
 <!-- Keep appending rows as work progresses. -->

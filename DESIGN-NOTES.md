@@ -48,7 +48,7 @@ Integrity is enforced in the database as well as in code (defence in depth):
 
 `Destinations` and `Operations` have a SQL Server `rowversion` column. SQL Server changes it automatically on
 every update. An update must send the version it read; if the row changed in the meantime, the update is
-rejected and the API returns 409 Conflict.
+rejected and the API returns 409 Conflict (see "Configuration updates").
 
 ### Configuration history (assignment 5.7)
 
@@ -68,7 +68,7 @@ Limitation: the history records *what* and *when*, not *who*. With an identity p
 | Item | Reason |
 |---|---|
 | Per-operation timeout | The assignment asks for a timeout on the destination *or* operation; the destination timeout is used. |
-| Permitted ports per destination | The port is part of the configured base URL, and the final URL is checked to match the base URL's scheme, host and port. A port list edited by the same administrator would not add protection. Base URLs are validated (absolute, http/https, no credentials) when configuration is saved. |
+| Permitted ports per destination | The port is part of the configured base URL, and the final URL is checked to match the base URL's scheme, host and port. A port list edited by the same administrator would not add protection. The base URL is validated (absolute, http/https) every time a request is built, and the final URL must stay on it. |
 | Regex validation rule for parameters | Type, length and range cover the requirement. Path traversal is handled when building the URL. |
 | Authentication profile per destination | Optional in the assignment. It would hold a *reference* to credentials the proxy presents to an upstream that requires authentication (the caller's `Authorization` header is never forwarded). |
 
@@ -114,6 +114,72 @@ a singleton. Making the provider a singleton would capture one `DbContext` for t
   deployment that needs immediate consistency would use a distributed cache or a pub/sub invalidation message.
 - A missing or invalid operational setting falls back to a safe, restrictive default and is logged, so a bad
   row can never disable a limit.
+
+## Configuration updates (assignment 5.7 and section 6, Concurrency)
+
+A small admin API changes an operation's settings:
+
+| Request | Answer |
+|---|---|
+| `GET /api/admin/operations/{key}` | `{ key, isEnabled, maxRequestBytes, rowVersion }` |
+| `PUT /api/admin/operations/{key}` with `{ isEnabled, maxRequestBytes, rowVersion }` | 200 with the new values and the new `rowVersion`; 409 `concurrency_conflict` when the sent version is no longer current |
+
+- **Protection:** the `X-Admin-Key` header must equal the configured `Admin:ApiKey` (user-secrets in development,
+  environment variable `Admin__ApiKey` elsewhere; never in appsettings or the database). It is compared in constant
+  time. With no key configured every admin request is rejected (fail closed). `AdminKeyFilter` runs before the
+  action, so a rejected request never reaches the admin code. A production system would use an identity provider
+  (a token with an admin role) instead of a shared key, which would also give the history its "who".
+- **What can be changed:** only `IsEnabled` and `MaxRequestBytes`. The destination, method and path decide where
+  requests go, so they are changed by migration or SQL, not by an API call. Any other field in the body is rejected,
+  not ignored, so an admin who sends `httpMethod` does not get 200 and believe it changed. The body is limited to 4 KB.
+  Creating and deleting operations is out of scope: the assignment asks about stale *updates*.
+- **Errors** use the same ProblemDetails format as the proxy (401 `admin_unauthorized`, 404 `unknown_operation`,
+  400 `invalid_admin_request`, 409 `concurrency_conflict`). The controller has no `[ApiController]`, whose automatic
+  400 has a different format.
+
+### Optimistic concurrency with rowversion
+
+1. The admin reads the operation (GET) and gets its `rowVersion`.
+2. The admin sends it back unchanged with the update (in the body; an `ETag` / `If-Match` header is the standard
+   HTTP alternative and would work the same way).
+3. `OperationAdminService` sets that value as the row's *original* version in EF Core. EF Core then writes
+   `UPDATE ... WHERE Id = @id AND RowVersion = @sentVersion`. The check and the write are one SQL statement, so two
+   concurrent updates cannot both pass.
+4. If anyone changed the row in between, no row matches, EF Core throws `DbUpdateConcurrencyException`, nothing is
+   written and the API returns 409. The admin reads again and decides.
+5. On success SQL Server sets the new `rowversion` itself, and the answer carries it for the next update.
+
+`UpdatedAt` is set on every update. Besides recording the time, this makes EF Core always send the UPDATE: without a
+changed column it would send nothing, and a stale update with unchanged values would pass as a success.
+
+The save does not use the caller's cancellation token: a caller who disconnects during the save could otherwise leave
+the change committed but the cache not cleared. Once the write starts, it finishes and the cache is cleared.
+
+### Cache and changes made outside the API
+
+After a successful save the configuration cache is cleared, so the next request on this instance reads the new
+values (see the consistency model above). A change made directly in SQL does not clear the cache and takes effect
+within `ConfigurationCacheSeconds` (30 s by default). Both are covered by tests.
+
+### Requests already running when an operation or destination is disabled
+
+A request reads its configuration once, at the start, and is checked and forwarded with that copy. So:
+
+- **requests already running finish** with the configuration they started with;
+- **new requests are rejected** as soon as the change is visible (at once through the admin API, within the cache
+  time otherwise): 403 `operation_disabled` or 503 `destination_unavailable`.
+
+Cancelling running requests was not chosen. A request that was already forwarded may have been carried out by the
+destination, and cancelling it would not undo that; it would only leave the caller without an answer and the outcome
+unknown. It would also need a registry of running requests per operation. The longest a disabled operation can
+still be running is the destination timeout.
+
+### History
+
+The configuration tables are temporal tables (see "Configuration history"), so every update, through the API or
+directly in SQL, keeps the previous row version with its validity period. A test checks that after an update
+`TemporalAll()` returns both versions. The update is also written to the technical log (operation key and new
+values). Admin requests are not written to `RequestLogs`, which records proxy requests.
 
 ## Checks before forwarding
 
@@ -274,7 +340,7 @@ the proxy marker, because its headers pass an allowlist.
 | Caller disconnected | nothing is sent | none (audited as `CallerCancelled`) |
 | Unexpected exception | 500 | `internal_error` |
 | Audit record cannot be saved before forwarding | 503 | `audit_unavailable` |
-| Stale configuration update | 409 | `concurrency_conflict` (admin endpoint, stage 9) |
+| Stale configuration update | 409 | `concurrency_conflict` (admin API) |
 
 A "missing destination" cannot occur: every operation has a required foreign key to a destination.
 
@@ -295,6 +361,9 @@ complete.
 `internal_error` in the same format. The middleware logs the full exception to the internal log only, skips the
 handler when the response has already started (the connection is aborted) and when the caller cancelled. A caller
 that disconnects during the checks is not an error: `ProxyService` catches that cancellation and writes nothing.
+One exception is the caller's fault: `BadHttpRequestException`, raised by the server when it refuses to read a
+request (for example a body over the admin API's size limit). It gets 413 `request_too_large` or 400
+`malformed_request`, not 500.
 The `Server` response header is turned off so the server software is not announced.
 
 ### Known limitations
@@ -439,6 +508,16 @@ second copy of the app (`WithWebHostBuilder`). Reads still work, so only the aud
 the case the policy is about. Stopping the database would also break reading the configuration and the other
 tests. Two tests show the policy: a valid request is not forwarded (503, the destination received nothing), and a
 rejection is answered as usual (403).
+
+### Admin API tests
+
+Test 16 and the admin API tests are in `ProxyEndpointTests.Admin.cs`, a second file of the same (partial) class, so
+they share its database: a second test class would get its own factory, which would rebuild the same database while
+the other tests run. Each test changes only its own `test.admin.*` operation, never the seed data. They cover the
+conflict (two updates from the same version: the first is kept, the second gets 409), a stale update with unchanged
+values, cache clearing, a direct SQL change waiting for the cache, the history rows, the admin key, unknown and
+non-updatable fields. The body size limit is enforced by Kestrel, not by the TestServer, so it is covered by a unit
+test of the exception handler and was checked by hand against Kestrel.
 
 The `ProxyService` unit tests give the auditor an EF Core in-memory database, only so its saves succeed without a
 server; the audit rows themselves are checked against SQL Server in the integration tests.
