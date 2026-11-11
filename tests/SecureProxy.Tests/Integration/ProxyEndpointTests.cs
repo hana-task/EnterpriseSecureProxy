@@ -26,8 +26,10 @@ namespace SecureProxy.Tests.Integration;
 ///
 /// Every rejection test asserts that the destination received nothing.
 /// The tests of one class run one after another, so sharing one fake destination is safe.
+/// The admin API tests are in ProxyEndpointTests.Admin.cs: the same class (partial), so they share this
+/// fixture and its database. A second test class would rebuild the same database while these tests run.
 /// </summary>
-public class ProxyEndpointTests : IClassFixture<ProxyApplicationFactory>
+public partial class ProxyEndpointTests : IClassFixture<ProxyApplicationFactory>
 {
     private const string Endpoint = "/api/proxy/execute";
 

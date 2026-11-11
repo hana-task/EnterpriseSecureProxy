@@ -7,6 +7,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using SecureProxy.Api.Admin;
 using SecureProxy.Api.Data;
 using SecureProxy.Api.Data.Entities;
 using SecureProxy.Api.Forwarding;
@@ -36,6 +37,19 @@ public sealed class ProxyApplicationFactory : WebApplicationFactory<Program>
     /// </summary>
     public static readonly byte[] PaymentsKey = Enumerable.Range(1, 32).Select(number => (byte)number).ToArray();
 
+    /// <summary>The admin key of the test app (X-Admin-Key). A fixed test value, like PaymentsKey.</summary>
+    public const string AdminKey = "test-admin-key";
+
+    /// <summary>
+    /// Operations only the admin tests change, one per test, so the tests do not depend on each other's order
+    /// and the seed operations other tests rely on are never touched. Enabled GET operations without parameters.
+    /// </summary>
+    public static readonly string[] AdminTestOperationKeys =
+        { "test.admin.conflict", "test.admin.unchanged", "test.admin.cache", "test.admin.sql", "test.admin.history", "test.admin.auth" };
+
+    /// <summary>The urlId of an admin test operation: its key with "." replaced by "-".</summary>
+    public static string UrlIdOf(string operationKey) => operationKey.Replace('.', '-');
+
     /// <summary>The test database. Public so a test can register its own DbContext on it (see the audit-failure tests).</summary>
     public string ConnectionString { get; } = TestConnectionString();
 
@@ -55,7 +69,11 @@ public sealed class ProxyApplicationFactory : WebApplicationFactory<Program>
         // Added after the app's own configuration sources, so it wins over a key in the user-secrets.
         // ConfigurationKeySource reads "ProxyKeys:{reference}".
         builder.ConfigureAppConfiguration(configuration => configuration.AddInMemoryCollection(
-            new Dictionary<string, string?> { ["ProxyKeys:payments-v1"] = Convert.ToBase64String(PaymentsKey) }));
+            new Dictionary<string, string?>
+            {
+                ["ProxyKeys:payments-v1"] = Convert.ToBase64String(PaymentsKey),
+                [AdminKeyFilter.ConfigurationKey] = AdminKey
+            }));
 
         // ConfigureTestServices runs after all the registrations in Program.cs, so what is registered
         // here replaces what Program registered.
@@ -106,6 +124,16 @@ public sealed class ProxyApplicationFactory : WebApplicationFactory<Program>
                 MaxResponseBytes = 1_048_576, CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow
             }
         });
+
+        foreach (var operationKey in AdminTestOperationKeys)
+        {
+            db.Operations.Add(new Operation
+            {
+                Key = operationKey, UrlId = UrlIdOf(operationKey), DestinationId = 1, HttpMethod = "GET",
+                PathTemplate = "/admin-test", IsEnabled = true, MaxRequestBytes = 4096,
+                CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow
+            });
+        }
 
         db.SaveChanges();
     }
