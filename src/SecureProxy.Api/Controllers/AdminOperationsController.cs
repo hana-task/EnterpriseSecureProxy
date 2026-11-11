@@ -15,6 +15,9 @@ namespace SecureProxy.Api.Controllers;
 [ServiceFilter(typeof(AdminKeyFilter))]
 public sealed class AdminOperationsController : ControllerBase
 {
+    /// <summary>The update body is three small fields; anything larger is not read (no unbounded buffering).</summary>
+    private const int MaxBodyBytes = 4096;
+
     private readonly OperationAdminService _adminService;
 
     public AdminOperationsController(OperationAdminService adminService)
@@ -32,10 +35,11 @@ public sealed class AdminOperationsController : ControllerBase
 
     /// <summary>200 with the new values and new rowVersion; 409 when the sent rowVersion is no longer current.</summary>
     [HttpPut("{key}")]
+    [RequestSizeLimit(MaxBodyBytes)]
     public async Task<IActionResult> Update(string key, [FromBody] OperationUpdateRequest? request)
     {
         // Invalid JSON or a wrong type leaves request null / ModelState invalid; our own message, no conversion details.
-        var problem = !ModelState.IsValid || request is null ? "The body must be a JSON object with isEnabled (true/false), maxRequestBytes (number) and rowVersion (base64)." : request.FindProblem();
+        var problem = !ModelState.IsValid || request is null ? "The body must be a JSON object with only isEnabled (true/false), maxRequestBytes (number) and rowVersion (base64)." : request.FindProblem();
         if (problem is not null)
             return await ErrorAsync(ProxyErrorCatalog.InvalidAdminRequest(problem));
 

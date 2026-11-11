@@ -53,7 +53,10 @@ public sealed class OperationAdminService
 
         try
         {
-            await _db.SaveChangesAsync(cancellationToken);
+            // Not the caller's token: a caller who disconnects during the save could otherwise leave the change
+            // committed in SQL Server but the cache not cleared (old values used for up to ConfigurationCacheSeconds).
+            // Once the write starts, it finishes and the cache is cleared (the same rule as the audit saves).
+            await _db.SaveChangesAsync(CancellationToken.None);
         }
         catch (DbUpdateConcurrencyException)
         {

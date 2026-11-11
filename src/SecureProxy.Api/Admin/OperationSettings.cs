@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace SecureProxy.Api.Admin;
 
 /// <summary>
@@ -10,7 +12,10 @@ public sealed record OperationSettings(string Key, bool IsEnabled, int MaxReques
 /// The body of PUT /api/admin/operations/{key}. All fields are required; nullable only so a missing field
 /// can be told apart from false / 0. Only these two fields can be changed through the API: destination,
 /// method and path decide where requests go, so they are changed by migration or SQL, not by an API call.
+/// Any other field rejects the request (JsonUnmappedMemberHandling.Disallow), instead of being silently ignored:
+/// an admin who sends "httpMethod" must not get 200 and believe the method changed.
 /// </summary>
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record OperationUpdateRequest(bool? IsEnabled, int? MaxRequestBytes, byte[]? RowVersion)
 {
     /// <summary>The same upper bound as the global request size setting (10 MB).</summary>

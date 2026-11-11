@@ -197,6 +197,26 @@ public partial class ProxyEndpointTests
     }
 
     [Fact]
+    public async Task Field_that_cannot_be_updated_is_rejected_not_ignored()
+    {
+        // An admin who sends httpMethod must not get 200 and believe the method changed.
+        const string key = "test.admin.auth";
+        var before = await OperationRowAsync(key);
+        var request = new HttpRequestMessage(HttpMethod.Put, AdminEndpoint + key)
+        {
+            Content = new StringContent(
+                $$"""{"isEnabled":false,"maxRequestBytes":1,"rowVersion":"{{Convert.ToBase64String(before.RowVersion)}}","httpMethod":"POST"}""",
+                System.Text.Encoding.UTF8, "application/json")
+        };
+        request.Headers.Add(AdminKeyFilter.HeaderName, ProxyApplicationFactory.AdminKey);
+
+        var response = await _caller.SendAsync(request);
+
+        await AssertProxyErrorAsync(response, HttpStatusCode.BadRequest, "invalid_admin_request");
+        Assert.Equal(before.RowVersion, (await OperationRowAsync(key)).RowVersion);
+    }
+
+    [Fact]
     public async Task Admin_api_matches_the_operation_key_exactly()
     {
         // SQL Server would match "TEST.admin.auth" to "test.admin.auth"; the admin API must not.

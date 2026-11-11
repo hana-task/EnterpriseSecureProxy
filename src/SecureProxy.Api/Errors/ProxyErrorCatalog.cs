@@ -85,6 +85,14 @@ public static class ProxyErrorCatalog
     public static ProxyError InvalidAdminRequest(string safeMessage) =>
         new(400, "invalid_admin_request", "Invalid request", safeMessage);
 
+    /// <summary>
+    /// The server itself refused to read the request (BadHttpRequestException), for example a body over a
+    /// [RequestSizeLimit]. A caller error, not ours: 413 for "too large", otherwise 400. Same codes as the proxy's checks.
+    /// </summary>
+    public static ProxyError ForBadHttpRequest(int serverStatusCode) => serverStatusCode == 413
+        ? ForRejection(new Rejection(RejectionReason.RequestTooLarge, "The request is too large."))
+        : ForRejection(new Rejection(RejectionReason.MalformedRequest, "The request could not be read."));
+
     /// <summary>Anything unexpected. Deliberately says nothing about what went wrong.</summary>
     public static ProxyError InternalError { get; } =
         new(500, "internal_error", "Internal error", "An unexpected error occurred.");
