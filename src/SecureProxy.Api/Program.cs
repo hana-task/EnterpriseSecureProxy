@@ -58,8 +58,10 @@ builder.Services.AddScoped<RequestAuditor>();
 // The whole flow of one request. Scoped because the validator and the auditor it uses are scoped.
 builder.Services.AddScoped<ProxyService>();
 
-// The admin API key check (the admin controller uses it through [ServiceFilter]). No per-request state.
+// Admin API: the key check (the admin controller uses it through [ServiceFilter], no per-request state)
+// and the update service (scoped: it uses the DbContext and the policy provider).
 builder.Services.AddSingleton<AdminKeyFilter>();
+builder.Services.AddScoped<OperationAdminService>();
 
 // Unexpected exceptions become a generic 500 in the usual error format (see UseExceptionHandler below).
 builder.Services.AddExceptionHandler<UnhandledExceptionHandler>();
