@@ -20,7 +20,7 @@ using SecureProxy.Tests.Forwarding;
 namespace SecureProxy.Tests.Integration;
 
 /// <summary>
-/// The required scenarios (assignment section 12) through the whole application:
+/// The required scenarios (assignment section 9) through the whole application:
 /// HTTP request → controller → checks with configuration from SQL Server → fake destination → HTTP answer.
 /// The configuration is the seed data of the migration (see SeedData).
 ///
@@ -678,7 +678,7 @@ public class ProxyEndpointTests : IClassFixture<ProxyApplicationFactory>
         Assert.Equal("UnknownOperation", record.Reason);
     }
 
-    // ---- SQL Server unavailable when the audit record must be written (stage 8, assignment 11) ----
+    // ---- SQL Server unavailable when the audit record must be written (stage 8, assignment section 8) ----
 
     /// <summary>
     /// Makes every save fail, as when SQL Server is down. Reads still work (configuration is read without

@@ -4,7 +4,8 @@
 
 ## Interpretation of unclear requirements
 
-The request example in section 4 of the assignment is garbled. Only the following is stated: the endpoint is
+The request example in section 4 of the assignment does not show the content of `json` (it reads `"json": ???`).
+Only the following is stated: the endpoint is
 `POST /api/proxy/execute`, the operation is found by `clientId`, and "Json must contain the urlId key".
 
 Our interpretation of the request contract:
@@ -392,7 +393,7 @@ Two layers, both xUnit:
 - **Unit tests** check one class at a time (each check, the decryptor, the forwarder, the error mapping), with
   fakes and no database or HTTP server.
 - **Integration tests** (`tests/SecureProxy.Tests/Integration`) cover the required scenarios of assignment
-  section 12 through the whole application: HTTP request → controller → checks with configuration read from SQL
+  section 9 through the whole application: HTTP request → controller → checks with configuration read from SQL
   Server → destination → HTTP answer.
 
 ### How the integration tests run
