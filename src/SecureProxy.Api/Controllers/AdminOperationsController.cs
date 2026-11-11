@@ -1,6 +1,8 @@
 using Microsoft.AspNetCore.Mvc;
 using SecureProxy.Api.Admin;
+using Microsoft.AspNetCore.RateLimiting;
 using SecureProxy.Api.Errors;
+using SecureProxy.Api.Resilience;
 
 namespace SecureProxy.Api.Controllers;
 
@@ -13,6 +15,7 @@ namespace SecureProxy.Api.Controllers;
 /// </summary>
 [Route("api/admin/operations")]
 [ServiceFilter(typeof(AdminKeyFilter))]
+[EnableRateLimiting(RateLimitingSetup.AdminPolicy)] // runs before the key check, so wrong keys count too
 public sealed class AdminOperationsController : ControllerBase
 {
     /// <summary>The update body is three small fields; anything larger is not read (no unbounded buffering).</summary>

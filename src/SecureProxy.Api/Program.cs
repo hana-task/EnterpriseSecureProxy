@@ -7,6 +7,7 @@ using SecureProxy.Api.Errors;
 using SecureProxy.Api.Forwarding;
 using SecureProxy.Api.Policies;
 using SecureProxy.Api.Proxy;
+using SecureProxy.Api.Resilience;
 using SecureProxy.Api.Security.Encryption;
 using SecureProxy.Api.Validation;
 using Serilog;
@@ -63,6 +64,9 @@ builder.Services.AddScoped<ProxyService>();
 builder.Services.AddSingleton<AdminKeyFilter>();
 builder.Services.AddScoped<OperationAdminService>();
 
+// Rate limiting and bounded concurrency (section 6, Resilience); values in the "RateLimiting" section.
+builder.Services.AddProxyRateLimiting(builder.Configuration);
+
 // Unexpected exceptions become a generic 500 in the usual error format (see UseExceptionHandler below).
 builder.Services.AddExceptionHandler<UnhandledExceptionHandler>();
 
@@ -95,6 +99,10 @@ if (app.Environment.IsDevelopment())
 app.UseHttpsRedirection();
 
 app.UseAuthorization();
+
+// After the correlation id (a 429 carries it too) and before the controllers, so a rejected request
+// costs no database work and never reaches a destination.
+app.UseRateLimiter();
 
 app.MapControllers();
 

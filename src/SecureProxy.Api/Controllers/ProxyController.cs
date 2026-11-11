@@ -1,5 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using SecureProxy.Api.Proxy;
+using SecureProxy.Api.Resilience;
 
 namespace SecureProxy.Api.Controllers;
 
@@ -11,6 +13,7 @@ namespace SecureProxy.Api.Controllers;
 /// </summary>
 [ApiController]
 [Route("api/proxy")]
+[EnableRateLimiting(RateLimitingSetup.ProxyPolicy)]
 public sealed class ProxyController : ControllerBase
 {
     private readonly ProxyService _proxyService;

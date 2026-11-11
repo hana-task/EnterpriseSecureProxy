@@ -63,6 +63,13 @@ public static class ProxyErrorCatalog
         new(503, "audit_unavailable", "Service unavailable",
             "The request could not be recorded, so it was not executed. Try again later.");
 
+    /// <summary>
+    /// Rejected by the rate limiter: too many requests from this client per minute, or the proxy is handling
+    /// as many requests as it allows at once. One code for both, so the answer reveals nothing about the limits.
+    /// </summary>
+    public static ProxyError TooManyRequests { get; } =
+        new(429, "too_many_requests", "Too many requests", "Too many requests. Try again later.");
+
     // ---- Admin API (configuration updates) ----
 
     /// <summary>The admin key is missing or wrong, or no admin key is configured on the server.</summary>

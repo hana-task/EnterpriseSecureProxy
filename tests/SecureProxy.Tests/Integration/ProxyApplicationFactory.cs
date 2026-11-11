@@ -72,7 +72,13 @@ public sealed class ProxyApplicationFactory : WebApplicationFactory<Program>
             new Dictionary<string, string?>
             {
                 ["ProxyKeys:payments-v1"] = Convert.ToBase64String(PaymentsKey),
-                [AdminKeyFilter.ConfigurationKey] = AdminKey
+                [AdminKeyFilter.ConfigurationKey] = AdminKey,
+
+                // All tests come from one client (TestServer has no IP address), so the normal limits would
+                // reject tests by chance. The rate-limiting tests set their own low limits.
+                ["RateLimiting:ProxyRequestsPerMinute"] = "100000",
+                ["RateLimiting:AdminRequestsPerMinute"] = "100000",
+                ["RateLimiting:MaxConcurrentRequests"] = "1000"
             }));
 
         // ConfigureTestServices runs after all the registrations in Program.cs, so what is registered
