@@ -14,7 +14,7 @@ using Serilog;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// The technical log (decision 12): Serilog, configured in appsettings.json ("Serilog" section).
+// The technical log: Serilog, configured in appsettings.json ("Serilog" section).
 // Console for people, a daily JSON file for tools. FromLogContext adds the scope values, such as the
 // CorrelationId of CorrelationIdMiddleware, to every line. Not the audit log: that is RequestLogs in SQL Server.
 builder.Host.UseSerilog((context, services, logger) => logger
@@ -71,11 +71,20 @@ builder.Services.AddProxyRateLimiting(builder.Configuration);
 builder.Services.AddExceptionHandler<UnhandledExceptionHandler>();
 
 builder.Services.AddControllers();
-// Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
+// Swagger UI for trying the API by hand; served in Development only (see below).
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
 var app = builder.Build();
+
+// Development only: create or update the database (schema and seed data) when the app starts, so a clean
+// machine needs no separate migration step. In production, migrations run as a separate deployment step:
+// several instances starting together would race, and the app would need permission to change the schema.
+if (app.Environment.IsDevelopment())
+{
+    using var scope = app.Services.CreateScope();
+    scope.ServiceProvider.GetRequiredService<ProxyDbContext>().Database.Migrate();
+}
 
 // First of all: the correlation id must be set before anything logs or answers, including the
 // exception handler below (its 500 answer carries the id too).
@@ -89,7 +98,7 @@ app.UseSerilogRequestLogging();
 // The empty lambda only satisfies a .NET 8 startup check; the registered UnhandledExceptionHandler does the work.
 app.UseExceptionHandler(_ => { });
 
-// Configure the HTTP request pipeline.
+// Swagger only in Development: it describes the API surface, which a production system need not publish.
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();

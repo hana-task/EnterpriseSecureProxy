@@ -42,7 +42,7 @@ public sealed class RequestAuditor
 
     /// <summary>
     /// What the checks learned. When the operation was found, its key comes from the configuration;
-    /// otherwise it is the caller's text, with unsafe characters replaced (decision 14).
+    /// otherwise it is the caller's text, with unsafe characters replaced.
     /// </summary>
     public void SetOperation(string? requestedKey, OperationPolicy? operation)
     {

@@ -43,7 +43,7 @@ public sealed class UpstreamForwarder
     {
         var client = _httpClientFactory.CreateClient(HttpClientName);
 
-        // Retry policy (decision 6): one more attempt, only for GET and only after a connection failure.
+        // Retry policy: one more attempt, only for GET and only after a connection failure.
         // GET does not change anything at the destination, so repeating it cannot duplicate an action.
         // POST/PUT/PATCH/DELETE are never repeated: the first attempt may have reached the destination
         // before the connection dropped. Timeouts and HTTP error statuses are not retried either.

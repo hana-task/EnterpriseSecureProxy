@@ -107,7 +107,7 @@ public class EnvelopeCheckTests
         Assert.Equal(RejectionReason.MalformedRequest, result.Rejection!.Reason);
     }
 
-    // ---- a body the server cannot read (found in the stage 6 review: it used to become a 500) ----
+    // ---- a body the server cannot read (it used to become a 500, see DEFECT-REPORT) ----
 
     [Theory]
     [InlineData(StatusCodes.Status400BadRequest, RejectionReason.MalformedRequest)]

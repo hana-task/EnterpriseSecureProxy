@@ -144,7 +144,7 @@ public partial class ProxyEndpointTests : IClassFixture<ProxyApplicationFactory>
     public async Task Url_field_is_ignored_by_an_operation_that_allows_unknown_parameters()
     {
         // customer.search allows unknown parameters, so the request passes, but the address still comes
-        // only from configuration, and the unknown field is not sent on (decision 13).
+        // only from configuration, and the unknown field is not sent on.
         var response = await SendAsync(
             """{"clientId":"customer.search","json":{"urlId":"crm-customer-search","name":"Dana","url":"http://evil.example/steal"}}""");
 
@@ -168,7 +168,7 @@ public partial class ProxyEndpointTests : IClassFixture<ProxyApplicationFactory>
     [Fact]
     public async Task Endpoint_accepts_only_post()
     {
-        // ASP.NET answers 405 itself (its own format, decision 18), so only the status is checked here.
+        // ASP.NET answers 405 itself (its own format, see DESIGN-NOTES), so only the status is checked here.
         var response = await _caller.GetAsync(Endpoint);
 
         Assert.Empty(_destination.Requests);
@@ -436,7 +436,7 @@ public partial class ProxyEndpointTests : IClassFixture<ProxyApplicationFactory>
         await destinationCancelled.Task.WaitAsync(TimeSpan.FromSeconds(5));
     }
 
-    // ---- unexpected exception (stage 6: the global handler, through the real middleware) ----
+    // ---- unexpected exception (the global handler, through the real middleware) ----
 
     private sealed class FailingPolicyProvider : IPolicyProvider
     {
@@ -536,7 +536,7 @@ public partial class ProxyEndpointTests : IClassFixture<ProxyApplicationFactory>
         Assert.Equal(UpstreamResponseWriter.SourceHeaderValue, SourceOf(response));
     }
 
-    // ---- correlation id (stage 8) ----
+    // ---- correlation id ----
 
     private static string CorrelationIdOf(HttpResponseMessage response) =>
         string.Join(",", response.Headers.GetValues(CorrelationIdMiddleware.HeaderName));
@@ -591,7 +591,7 @@ public partial class ProxyEndpointTests : IClassFixture<ProxyApplicationFactory>
         Assert.Matches("^[0-9a-f]{32}$", CorrelationIdOf(response));
     }
 
-    // ---- 17. audit records for successful, rejected and failed requests (stage 8) ----
+    // ---- 17. audit records for successful, rejected and failed requests ----
 
     /// <summary>
     /// The RequestLogs row of a request, found by the correlation id the caller got back.
@@ -668,7 +668,7 @@ public partial class ProxyEndpointTests : IClassFixture<ProxyApplicationFactory>
     [Fact]
     public async Task Unknown_operation_key_is_audited_with_unsafe_characters_replaced()
     {
-        // Decision 14: the key is the caller's text, so a line break or markup must not reach the logs.
+        // The key is the caller's text, so a line break or markup must not reach the logs.
         var response = await SendAsync(
             """{"clientId":"fake\nline<b>","json":{"urlId":"crm-customers"}}""");
 
@@ -680,7 +680,7 @@ public partial class ProxyEndpointTests : IClassFixture<ProxyApplicationFactory>
         Assert.Equal("UnknownOperation", record.Reason);
     }
 
-    // ---- SQL Server unavailable when the audit record must be written (stage 8, assignment section 8) ----
+    // ---- SQL Server unavailable when the audit record must be written (assignment section 8) ----
 
     /// <summary>
     /// Makes every save fail, as when SQL Server is down. Reads still work (configuration is read without

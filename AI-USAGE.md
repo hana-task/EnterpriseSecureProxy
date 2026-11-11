@@ -2,22 +2,47 @@
 
 Tool: **Claude Code** (Anthropic; Claude Opus 5.5 and Claude Sonnet 5.5 models) inside VS Code.
 
-I remain responsible for the full solution. I reviewed, ran and understood all AI-generated code and can explain each design decision.
+## Ownership
+
+This is my solution, and I am responsible for all of it. AI was used as a development tool under my direction:
+no code was added without my reviewing it. I went over every change, asked questions about what I did not
+understand, commented and asked for changes, and ran the tests and the application myself. I can explain,
+trace and modify every part of the code.
+
+## How I worked with Claude Code
+
+1. **Planning first.** Before writing code, I used the AI to analyse the assignment, map every requirement to a
+   stage and a test, and list the unclear points. The plan, with time estimates and a decision log, was kept in
+   a working document throughout the project.
+2. **Splitting into stages.** The work was split into small stages (database, configuration, checks, forwarding,
+   errors, tests, audit, admin API, resilience, documentation). Each stage started with a short plan that I
+   approved or changed before any code was written.
+3. **I made the decisions.** For each open question (interpretation of the requirements, status codes, audit
+   policy, retry policy, what to implement and what only to explain), the AI presented the options with a
+   recommendation, and I chose.
+4. **Two models.** I used Claude Opus 5.5 for planning and code review, and Claude Sonnet 5.5 for writing code.
+5. **Code review after each stage.** Each stage ended with the tests passing and a code review (with Claude Code's
+   code-review skill) against the relevant assignment sections. Some behaviour was also checked against the
+   running application and a real SQL Server. The real defects these reviews found were fixed with tests and are
+   listed in DEFECT-REPORT.md.
+6. **Reading the code myself.** I read the code of each step in the editor, traced requests through it with the
+   debugger, and discussed the design choices until I could explain them in my own words. Where I disagreed
+   with something, I asked for it to be changed.
+
+## What AI was used for
 
 | Area | How AI was used |
 |---|---|
-| Requirements analysis | Clarifying the (partly garbled) assignment document, identifying missing items, drafting clarification questions, planning and effort estimation. |
-| Work planning | Splitting the work into stages with time estimates. I reviewed and adjusted the plan. |
+| Requirements analysis and planning | Clarifying the assignment, identifying unclear items, splitting the work into stages with time estimates. I reviewed and adjusted the plan. |
 | Environment setup | Installing the .NET 8 SDK, running SQL Server in Docker, scaffolding the solution. |
-| Encryption component | Generating the AES-GCM decryptor, the key-source abstraction and unit tests. Design choices (AAD bound to operation key, fail-closed key resolution, typed failures) were discussed and reviewed. |
-| Data model | Proposing the schema mapped to assignment sections 3 and 5.1–5.7. I chose the simplifications and the interpretation of `urlId`. AI generated the entities, the DbContext configuration, sample data and the migration, and verified the result in SQL Server. |
-| Configuration reading and cache | Generating the repository, the immutable policy records, the cache-aside provider and its unit tests. The repository was verified against the development database. |
-| Checks before forwarding | Designing the order of checks and the rejection model with me, then generating the check classes (envelope, operation, urlId, decryption, parameters, URL and body builder, header filter), the validator and their unit tests. The interpretation of the unclear requirements (method, unknown parameters, encrypted format) was decided by me after the options were explained. An AI code review of the stage found five real defects (invalid JSON text causing an exception, a base-path prefix check, `?`/`#` in path templates, body-describing headers, differing decryption messages); they were fixed with tests and are listed in DEFECT-REPORT. |
-| Forwarding to the destination | Designing the structure with me (forwarder, result type, response writer, header filter), then generating the code and its unit tests with a recording fake destination: `IHttpClientFactory` client, per-destination timeout with caller-cancel vs timeout distinction, streaming with a response size limit, response header allowlist, and the retry policy. I chose the retry option (one retry, GET only, connection failures only) after the alternatives were explained. During development a fake response stream in a test ignored cancellation and hung the test run; I fixed the test double (not a product defect). An AI code review of the stage against assignment section 6 found one real defect (an out-of-range destination timeout threw inside the forwarder and leaked its cancellation source; a non-positive response limit was noticed only after the destination had acted). It was fixed with tests and is listed in DEFECT-REPORT; the review also added missing tests for the response writer. |
-| Endpoint and error handling | Planning the structure with me, generating the code and unit tests, and a code review against assignment section 7. I chose the status codes after the options were explained. |
-| Integration tests | Planning the test setup with me, generating the integration tests for the required scenarios and a review against assignment section 9. |
-| Audit and logging | Planning the audit policy with me, generating the correlation id, Serilog setup, the audit recorder and their tests, and a review against assignment sections 5.6 and 11. I chose the policy after the options were explained. |
-| Configuration updates | Planning the admin API, the rowversion conflict handling and cache clearing with me, generating the code and tests, and a review against assignment sections 5.7 and 6. I chose the simplest options after they were explained. The review found a real defect (a request the server refused to read became a 500), fixed with a test and listed in DEFECT-REPORT. |
-| Resilience | Planning with me which items to implement and which to explain, generating the rate limiting and concurrency limit setup with its tests, and writing the circuit breaker explanation. I chose to implement only what the built-in limiter gives with little code. |
-
-<!-- Keep appending rows as work progresses. -->
+| Encryption | Generating the AES-GCM decryptor, the key-source abstraction and their tests. The design choices (ciphertext bound to the operation through the AAD, fail closed on a missing key, typed failures) were discussed and reviewed. |
+| Data model | Proposing the schema for assignment sections 3 and 5, then generating the entities, EF Core configuration, migration and seed data. I chose what the schema includes and the interpretation of `urlId`. |
+| Configuration reading and caching | Generating the repository, the immutable configuration records, the cache and their tests. |
+| Checks before forwarding | Designing the order of checks and the rejection model with me, then generating the checks and their tests. I decided the interpretation of the unclear requirements (method, unknown parameters, encrypted format). |
+| Forwarding | Designing the forwarder with me and generating it with its tests: `IHttpClientFactory`, timeouts, cancellation, streaming, size limits, response headers. I chose the retry policy. |
+| Endpoint and error handling | Generating the controller, the error format and mapping, and their tests. I chose the status codes. |
+| Integration tests | Planning the test setup with me and generating the tests for the required scenarios, with a recording fake destination. |
+| Audit and logging | Planning the audit policy with me and generating the correlation id, Serilog setup, audit recorder and tests. I chose the policy. |
+| Configuration updates | Generating the admin API with rowversion conflict handling, cache clearing and tests. |
+| Resilience | Generating the rate limiting and concurrency limit with tests, and writing the circuit breaker explanation. I chose what to implement and what to explain. |
+| Documentation | Drafting README, DESIGN-NOTES and DEFECT-REPORT from the decisions made during the work. I reviewed them. |

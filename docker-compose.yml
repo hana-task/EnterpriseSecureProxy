@@ -1,0 +1,25 @@
+# Local infrastructure for development and the demo. The proxy itself runs with `dotnet run` (or F5).
+#   docker compose up -d     start both containers
+#   docker compose down      stop and remove them (add -v to delete the database volume too)
+services:
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      ACCEPT_EULA: "Y"
+      # Example password for this local container only. Use the same value in the connection string (README, step 2).
+      MSSQL_SA_PASSWORD: "Proxy#Dev2026!"
+    ports:
+      - "14330:1433" # 14330 avoids a clash with a local SQL Server on 1433
+    volumes:
+      - sqlserver-data:/var/opt/mssql
+
+  # Stand-in for the "crm" destination of the seed data (http://localhost:5101). A ready-made echo server:
+  # it answers with what it received (method, path, query, headers, body), so the demo shows exactly what
+  # the proxy forwarded. The automated tests do not use it; they use an in-memory recording destination.
+  crm-echo:
+    image: mendhak/http-https-echo:31
+    ports:
+      - "5101:8080"
+
+volumes:
+  sqlserver-data:

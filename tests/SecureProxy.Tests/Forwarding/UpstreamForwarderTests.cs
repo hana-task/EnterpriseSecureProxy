@@ -121,7 +121,7 @@ public class UpstreamForwarderTests
         Assert.Null(result.Response);
     }
 
-    // ---- retries (decision 6: one retry, GET only, connection failures only) ----
+    // ---- retries (one retry, GET only, connection failures only) ----
 
     /// <summary>Fails to connect the given number of times, then answers 200.</summary>
     private static RecordingHandler FailsThenAnswers(int failures)

@@ -1,6 +1,38 @@
 # Design Notes
 
-> Work in progress. Each section is written when the corresponding part is built.
+## Overview
+
+One ASP.NET Core 8 Web API project, with folders by responsibility (see README, "Project structure"), and one
+xUnit test project. The size fits the problem: the separation is kept by folders and a few interfaces, and the
+code could be split into projects later without rewriting it.
+
+The flow of one request to `POST /api/proxy/execute`:
+
+```
+CorrelationIdMiddleware    take or create the correlation id
+RateLimiter                concurrency limit and per-client limit (429)
+ProxyController            hands the request to ProxyService
+ProxyService
+  RequestValidator         envelope -> operation and destination -> urlId -> decryption -> parameters
+                           -> URL and body built from configuration -> header filter
+                           (any failure: proxy error, nothing is sent)
+  RequestAuditor           audit row saved before forwarding (mandatory)
+  UpstreamForwarder        IHttpClientFactory, destination timeout, cancellation
+  UpstreamResponseWriter   destination's status, filtered headers, streamed and size-limited body
+  RequestAuditor           audit row completed with the outcome
+```
+
+Every decision is driven by the configuration in SQL Server, read once per request into an immutable
+`OperationPolicy`. Any failed check, missing key or unavailable audit means the request is not forwarded
+(fail closed).
+
+Contents: [Interpretation of unclear requirements](#interpretation-of-unclear-requirements) ·
+[Data model](#data-model) · [Reading configuration and caching](#reading-configuration-and-caching) ·
+[Configuration updates](#configuration-updates-assignment-57-and-section-6-concurrency) ·
+[Checks before forwarding](#checks-before-forwarding) · [Forwarding to the destination](#forwarding-to-the-destination) ·
+[Endpoint and error responses](#endpoint-and-error-responses) ·
+[Audit and logging](#audit-and-logging-assignment-56-and-section-8) ·
+[Resilience](#resilience-assignment-section-6) · [Testing](#testing)
 
 ## Interpretation of unclear requirements
 
@@ -79,6 +111,16 @@ showing one scenario: a plain request with a path parameter (`customer.get`), qu
 parameters allowed (`customer.search`), an encrypted POST (`payment.create`), a disabled operation
 (`customer.export`), and an operation on a disabled destination (`invoice.get`).
 Automated tests create their own data.
+
+For a manual demo, `docker-compose.yml` runs a ready-made echo server on the `crm` destination's address
+(`localhost:5101`). It answers with what it received, so a demo request shows exactly what the proxy forwarded.
+It is not part of the solution and the tests do not use it.
+
+### Creating the database
+
+In the Development environment the app applies the migrations (schema and seed data) when it starts, so a clean
+machine needs no separate step. In production this would be a separate deployment step: several instances starting
+together would race, and the application's database account would need permission to change the schema.
 
 ## Reading configuration and caching
 
@@ -208,9 +250,10 @@ from configuration. They are cheap-first: checks on the request itself, then con
 A check returns `CheckResult<T>`: passed (with a value for the next check) or rejected (a `RejectionReason` and
 a fixed, safe message). A bad request is an expected outcome, not an exceptional one, and a returned value cannot
 be ignored by the caller the way a forgotten `catch` can. A genuine bug or an unavailable database still throws;
-the controller (stage 6) turns that into a generic 500, so the request is not forwarded (fail closed).
+the exception handler turns that into a generic 500, so the request is not forwarded (fail closed).
 `PreForwardResult` also carries the operation key and policy known so far, so a rejected request can be audited.
-Mapping reasons to HTTP responses is done in stage 6; the messages never contain caller-supplied values.
+Reasons are mapped to HTTP responses in one place (see "Endpoint and error responses"); the messages never
+contain caller-supplied values.
 
 ### Decisions
 
@@ -232,8 +275,8 @@ Mapping reasons to HTTP responses is done in stage 6; the messages never contain
 - Checks on the configuration itself (allowed method, base URL, template shape, destination timeout range and
   response limit, a `{placeholder}` without a
   path rule, body parameters on GET, the encryption algorithm) run on every request, as defence in depth.
-  A bad row therefore shows up only at request time, as `ProxyMisconfigured`. The admin update (stage 9) is the
-  place to reject such a row when it is saved.
+  A bad row therefore shows up only at request time, as `ProxyMisconfigured`. A full configuration API would
+  reject such a row when it is saved; the admin API here changes only `IsEnabled` and `MaxRequestBytes`.
 - On an operation cache miss the settings are read twice (once by the validator, once by the provider to know
   the cache duration). Both reads are normally served from the cache, so this was left as is.
 
@@ -255,7 +298,7 @@ UpstreamResponseWriter        status code + filtered headers + body copied in ch
   -> ForwardOutcome           Responded | ResponseTooLarge | Timeout | ConnectionFailed | CallerCancelled
 ```
 
-Mapping to HTTP (done in stage 6): `Timeout` -> 504, `ConnectionFailed` and `ResponseTooLarge` -> 502,
+Mapping to HTTP (see "Endpoint and error responses"): `Timeout` -> 504, `ConnectionFailed` and `ResponseTooLarge` -> 502,
 `CallerCancelled` -> nothing is sent (nobody is waiting; only audited). An HTTP error from the destination
 (4xx/5xx) is `Responded`: its status code and body are passed on, marked with `X-Proxy-Source: upstream`, so a
 caller can tell a destination answer from a proxy-generated failure.
@@ -270,7 +313,7 @@ caller can tell a destination answer from a proxy-generated failure.
 | Response size limit | `Destination.MaxResponseBytes`. A declared `Content-Length` over the limit is refused before anything is sent. Otherwise the bytes are counted while streaming (a destination may not declare a size, or may lie). Status and headers are written only when the first chunk arrives, so an early failure still lets the controller send a clean error. If the limit is exceeded after sending started, the connection is aborted: a broken response is better than a truncated one that looks complete. |
 | Streaming | `ResponseHeadersRead` and an 8 KB copy loop: the body is never loaded into memory as a whole. |
 | Response headers | Allowlist in code (`Content-Type`, `Content-Encoding`, `Content-Language`, `Cache-Control`, `ETag`, `Last-Modified`, `Retry-After`). Everything else is dropped: `Set-Cookie`, `Server`, `X-Powered-By`, `Location`, hop-by-hop headers. `Content-Length` is not copied because the proxy's own connection frames the body. |
-| Retries (decision 6) | One extra attempt, only for `GET` and only after a connection failure, within the same timeout. A `GET` changes nothing at the destination, so repeating it cannot duplicate an action. `POST`/`PUT`/`PATCH`/`DELETE` are never repeated: the connection may drop after the destination already did the work. Timeouts (the destination may still be working) and HTTP error statuses (the destination answered; repeating adds load to a struggling system) are not retried. |
+| Retries | One extra attempt, only for `GET` and only after a connection failure, within the same timeout. A `GET` changes nothing at the destination, so repeating it cannot duplicate an action. `POST`/`PUT`/`PATCH`/`DELETE` are never repeated: the connection may drop after the destination already did the work. Timeouts (the destination may still be working) and HTTP error statuses (the destination answered; repeating adds load to a struggling system) are not retried. |
 
 ### Idempotency keys (explanation, not implemented)
 
@@ -376,7 +419,7 @@ The `Server` response header is turned off so the server software is not announc
 - When the configuration database is unreachable the request fails closed with 500; the audit behaviour for that
   case is defined in the audit section.
 
-## Audit and logging (assignment 5.6, 11)
+## Audit and logging (assignment 5.6 and section 8)
 
 There are two logs with different jobs:
 
@@ -521,7 +564,7 @@ failure. A breaker rejects requests, so it never duplicates an operation and fit
 
 ### Retries
 
-Covered in Forwarding (decision 6): one retry, only for `GET` and only after a connection failure. No resilience
+Covered in "Forwarding to the destination": one retry, only for `GET` and only after a connection failure. No resilience
 policy repeats `POST`/`PUT`/`PATCH`/`DELETE`.
 
 ## Testing

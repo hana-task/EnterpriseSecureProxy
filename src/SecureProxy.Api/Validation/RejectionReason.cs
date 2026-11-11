@@ -1,8 +1,8 @@
 namespace SecureProxy.Api.Validation;
 
 /// <summary>
-/// Why a request was rejected before forwarding. Stage 6 maps each reason to an HTTP response;
-/// stage 8 writes it to the audit log.
+/// Why a request was rejected before forwarding. ProxyErrorCatalog maps each reason to an HTTP response;
+/// RequestAuditor writes it to the audit log.
 /// </summary>
 public enum RejectionReason
 {
