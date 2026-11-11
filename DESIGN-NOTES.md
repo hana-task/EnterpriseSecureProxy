@@ -54,6 +54,35 @@ Our interpretation of the request contract:
   operation's path template).
 - All other fields in `json` are parameters, validated against the operation's parameter rules.
 
+### Data protection (section 4, step 4)
+
+The fourth processing step reads "take into circumstances data protection and more...". We read it as
+protecting the data that passes through the proxy at every point:
+
+- **From the caller:** an operation that carries sensitive data requires AES-256-GCM encrypted parameters, and a
+  plain request to it is rejected (see "Checks before forwarding").
+- **Toward the destination:** only validated parameters are sent, the body is rebuilt from them, and only
+  allowlisted headers pass. Credentials and cookies are never forwarded (see "Checks before forwarding").
+- **Back to the caller:** only allowlisted response headers pass (no `Set-Cookie`, no `Server`), and error messages
+  contain no internal details (see "Endpoint and error responses").
+- **In logs and storage:** the audit and technical logs hold no bodies, headers, parameter values or keys.
+  Keys are referenced by name and never stored (see "Data model" and "Audit and logging").
+- **Against SSRF:** the address is built only from configuration, must stay on the destination's base URL, and
+  redirects are not followed (see "Forwarding to the destination").
+
+### Caller authentication (out of scope)
+
+The assignment does not say who may call the proxy, and no caller identity is implemented: a client that can
+reach the endpoint may request any enabled operation. In production the proxy would run behind an
+authentication layer, such as mTLS or an API gateway that validates a token (OAuth 2.0 client credentials) and
+passes on a trusted caller identity. The proxy would then:
+
+- check a per-operation permission (which callers may use which operation), as one more check before forwarding;
+- use the caller identity, instead of the IP address, as the rate-limit key;
+- record the caller in `RequestLogs`.
+
+The admin API, which changes configuration, is protected by an admin key (see "Configuration updates").
+
 ## Data model
 
 | Table | Purpose |
@@ -312,6 +341,7 @@ caller can tell a destination answer from a proxy-generated failure.
 | Caller cancel vs timeout (tests 13, 15) | Both surface as `OperationCanceledException`. The caller's own token decides: cancelled means the caller left (`CallerCancelled`), otherwise the destination timed out (504). The linked token is passed to `SendAsync` and to every body read, so the cancel reaches the outgoing call. |
 | Response size limit | `Destination.MaxResponseBytes`. A declared `Content-Length` over the limit is refused before anything is sent. Otherwise the bytes are counted while streaming (a destination may not declare a size, or may lie). Status and headers are written only when the first chunk arrives, so an early failure still lets the controller send a clean error. If the limit is exceeded after sending started, the connection is aborted: a broken response is better than a truncated one that looks complete. |
 | Streaming | `ResponseHeadersRead` and an 8 KB copy loop: the body is never loaded into memory as a whole. |
+| Request body in memory | The caller's body is read into memory, never more than the global limit (64 KB by default): a declared `Content-Length` over the limit is refused before reading, and the bytes are counted while reading. It is not streamed to the destination, on purpose: the whole body must be parsed, checked and, if needed, decrypted before anything is sent, and streaming it through would start forwarding before the checks are complete. The body sent upstream is rebuilt from the validated parameters. |
 | Response headers | Allowlist in code (`Content-Type`, `Content-Encoding`, `Content-Language`, `Cache-Control`, `ETag`, `Last-Modified`, `Retry-After`). Everything else is dropped: `Set-Cookie`, `Server`, `X-Powered-By`, `Location`, hop-by-hop headers. `Content-Length` is not copied because the proxy's own connection frames the body. |
 | Retries | One extra attempt, only for `GET` and only after a connection failure, within the same timeout. A `GET` changes nothing at the destination, so repeating it cannot duplicate an action. `POST`/`PUT`/`PATCH`/`DELETE` are never repeated: the connection may drop after the destination already did the work. Timeouts (the destination may still be working) and HTTP error statuses (the destination answered; repeating adds load to a struggling system) are not retried. |
 

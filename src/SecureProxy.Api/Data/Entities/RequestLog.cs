@@ -11,7 +11,10 @@ public class RequestLog
 {
     public long Id { get; set; }
 
-    /// <summary>Unique id of the request, also returned to the caller.</summary>
+    /// <summary>
+    /// The request's correlation id, also returned to the caller. Taken from the caller's X-Correlation-ID
+    /// when valid, so it is a search key and not guaranteed to be unique.
+    /// </summary>
     public string CorrelationId { get; set; } = null!;
 
     /// <summary>The operation key the caller asked for. Null when the envelope was invalid.</summary>
@@ -35,6 +38,6 @@ public class RequestLog
 
     public RequestOutcome? Outcome { get; set; }
 
-    /// <summary>A fixed reason code such as "operation_disabled". Never free text from the caller.</summary>
+    /// <summary>A fixed reason code such as "OperationDisabled" (a RejectionReason or ForwardOutcome name). Never free text from the caller.</summary>
     public string? Reason { get; set; }
 }
