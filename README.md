@@ -35,7 +35,8 @@ docker compose up -d
 
 - **SQL Server 2022** on port 14330 (avoids a clash with a local SQL Server on 1433). The password in the file is
   an example for this local container only; any strong password works if the same value is used in step 2.
-  SQL Server needs about 10–20 seconds before it accepts connections.
+  On the first start SQL Server needs about a minute to initialize (later starts take a few seconds). It is
+  ready when `docker compose logs sqlserver` shows `ready for client connections`.
 - **An echo server** on port 5101, standing in for the `crm` destination of the sample data. It answers with
   what it received, so a demo request shows exactly what the proxy forwarded. The automated tests do not need it.
 
