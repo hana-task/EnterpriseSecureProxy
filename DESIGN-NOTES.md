@@ -283,7 +283,8 @@ This needs support at the destination, so the proxy only forwards such a key if 
 - A connection failure on `GET` is retried once even if the connection dropped after the destination received the
   request. This is safe only because `GET` is idempotent; an operation configured as `GET` that changes data at
   the destination would be repeated. The configuration owner is responsible for the method matching the effect.
-- A destination that is down costs a failed request twice per `GET`. A circuit breaker (stage 10) limits that.
+- A destination that is down costs a failed request twice per `GET`. A circuit breaker would limit that
+  (see Resilience).
 
 ## Endpoint and error responses
 
@@ -341,6 +342,7 @@ the proxy marker, because its headers pass an allowlist.
 | Unexpected exception | 500 | `internal_error` |
 | Audit record cannot be saved before forwarding | 503 | `audit_unavailable` |
 | Stale configuration update | 409 | `concurrency_conflict` (admin API) |
+| Rate limit or concurrency limit reached | 429 | `too_many_requests` (proxy and admin API) |
 
 A "missing destination" cannot occur: every operation has a required foreign key to a destination.
 
@@ -455,6 +457,73 @@ exception message. EF Core's sensitive data logging is off, so SQL parameter val
   side.
 - The audit fallback in the technical log was verified by reading the log file, not by an automated test.
 
+## Resilience (assignment section 6)
+
+Rate limiting and bounded concurrency are implemented with the rate limiter built into ASP.NET Core
+(`Resilience/RateLimitingSetup`, no extra package). A circuit breaker is explained, not implemented.
+
+```
+CorrelationId -> request log -> exception handler -> RateLimiter -> controller
+                                                     1. concurrency limit (whole app)
+                                                     2. per-client limit per minute ("proxy" or "admin")
+```
+
+A rejected request is answered before the controller runs: no configuration read, no audit row, nothing sent to a
+destination. It comes after the correlation id middleware, so the 429 carries the id like every other error.
+
+| Limit | Value (appsettings `RateLimiting`) | Why |
+|---|---|---|
+| Proxy requests per client per minute | 100 | One caller cannot use up the proxy or flood a destination. Also limits repeated lookups of unknown operation keys, which are not cached. |
+| Admin requests per client per minute | 10 | The admin key cannot be guessed by trying many keys. The limiter runs before the key check, so wrong keys count. |
+| Requests in progress at once (whole app) | 100, no queue | Bounded concurrency: slow destinations cannot make the proxy hold an unbounded number of open requests and connections. Beyond the limit a request is rejected at once instead of waiting. |
+
+- **Answer:** 429 `too_many_requests` in the usual error format, with `Retry-After` when the per-minute limit was hit
+  (the concurrency limit has no meaningful "come back at"). One code for both limits, so the answer reveals nothing
+  about which limit or its value.
+- **Client = IP address**, because the proxy has no caller identity (out of scope). Behind a gateway or load balancer
+  all requests share one address, so the partition key would become the forwarded client address (only if the
+  gateway is trusted) or the authenticated caller.
+- **Fixed window**: simple and predictable. A client can send up to twice the limit around a window boundary; a
+  sliding window or token bucket smooths that, at the cost of a little more state.
+- **Settings in appsettings, not the database**: the limiters exist before any request, and the limit must still work
+  when SQL Server is slow or down.
+- **Per instance**: each instance counts on its own. Several instances would need a shared counter (for example
+  Redis) or the limit at the gateway.
+- **Not audited in `RequestLogs`**: during a flood, a database write per rejected request would turn the flood into
+  load on SQL Server. Each rejection is one warning line in the technical log instead.
+
+### Concurrency per destination (not implemented)
+
+The limit above is for the whole app. A single slow destination can still take all 100 places and block the others.
+The next step would be a limit per destination: `SocketsHttpHandler.MaxConnectionsPerServer` on the upstream client
+(one line, but excess requests then wait for a connection until their timeout instead of failing fast), or a
+`ConcurrencyLimiter` per destination in the forwarder that rejects at once.
+
+### Circuit breaker (explained, not implemented)
+
+Without one, every request to a destination that is down waits for a connection failure or its full timeout. The
+timeout already bounds how long one request can take, and the concurrency limit bounds how many wait at once, so
+the proxy itself stays healthy; a circuit breaker would answer faster and stop sending load to a failing system.
+
+How it would work, per destination:
+
+| State | Behaviour |
+|---|---|
+| Closed (normal) | Requests are sent. Failures are counted: connection failures and timeouts, and possibly 5xx answers. |
+| Open | After too many failures in a short time (for example 5 in 30 s), requests fail at once with 503, without being sent, for a break time (for example 30 s). |
+| Half-open | After the break, one trial request is sent. Success closes the circuit, failure opens it again. |
+
+In .NET it would be `Microsoft.Extensions.Http.Resilience` (Polly) on the upstream client, with one circuit per
+destination (`SelectPipelineByAuthority`). It was left out because it adds state shared between requests and
+questions that need agreeing with the destination owners: which failures count (a 5xx may be a valid business
+answer), and whether a timeout of a non-idempotent call, which may have succeeded at the destination, counts as a
+failure. A breaker rejects requests, so it never duplicates an operation and fits the retry policy.
+
+### Retries
+
+Covered in Forwarding (decision 6): one retry, only for `GET` and only after a connection failure. No resilience
+policy repeats `POST`/`PUT`/`PATCH`/`DELETE`.
+
 ## Testing
 
 Two layers, both xUnit:
@@ -518,6 +587,14 @@ conflict (two updates from the same version: the first is kept, the second gets 
 values, cache clearing, a direct SQL change waiting for the cache, the history rows, the admin key, unknown and
 non-updatable fields. The body size limit is enforced by Kestrel, not by the TestServer, so it is covered by a unit
 test of the exception handler and was checked by hand against Kestrel.
+
+### Rate limiting tests
+
+`ProxyEndpointTests.RateLimiting.cs`. All test requests come from one client, so the shared test app uses very high
+limits, and each rate-limiting test starts its own copy of the app (`WithWebHostBuilder`) with low ones. They cover
+the per-minute limit (429, the usual error format, `Retry-After`, nothing forwarded), the admin limit being separate
+(and counting wrong keys), and the concurrency limit: the fake destination holds one request open, the next one is
+rejected, and after the first finishes a new one passes.
 
 The `ProxyService` unit tests give the auditor an EF Core in-memory database, only so its saves succeed without a
 server; the audit rows themselves are checked against SQL Server in the integration tests.
