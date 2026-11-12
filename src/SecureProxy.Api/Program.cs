@@ -9,6 +9,7 @@ using SecureProxy.Api.Policies;
 using SecureProxy.Api.Proxy;
 using SecureProxy.Api.Resilience;
 using SecureProxy.Api.Security.Encryption;
+using SecureProxy.Api.Swagger;
 using SecureProxy.Api.Validation;
 using Serilog;
 
@@ -73,7 +74,12 @@ builder.Services.AddExceptionHandler<UnhandledExceptionHandler>();
 builder.Services.AddControllers();
 // Swagger UI for trying the API by hand; served in Development only (see below).
 builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen();
+builder.Services.AddSwaggerGen(options =>
+{
+    // Sample bodies for the proxy endpoint and the X-Admin-Key header (see SwaggerDocumentFilter).
+    options.AddSecurityDefinition(SwaggerDocumentFilter.AdminKeySchemeName, SwaggerDocumentFilter.AdminKeyScheme());
+    options.OperationFilter<SwaggerDocumentFilter>();
+});
 
 var app = builder.Build();
 

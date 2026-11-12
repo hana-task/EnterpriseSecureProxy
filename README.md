@@ -78,6 +78,8 @@ Or open `EnterpriseSecureProxy.sln` in Visual Studio and press F5.
 - In the Development environment, the app creates or updates the database on startup (EF Core migration with the
   sample data). In production, migrations would run as a separate deployment step (see DESIGN-NOTES).
 - Swagger UI: http://localhost:5157/swagger (the `https` profile: https://localhost:7263/swagger).
+  The proxy endpoint offers ready-made sample requests (the "Examples" list); for the admin API, enter the
+  admin key once with the Authorize button.
 - Logs: the console, and a daily JSON file in `src/SecureProxy.Api/logs/`.
 
 ## Using the proxy
